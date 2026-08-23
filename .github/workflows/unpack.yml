@@ -1,0 +1,28 @@
+name: Unpack production source
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - boltpoint-marketplace-delivery-source.zip
+      - .github/workflows/unpack.yml
+
+permissions:
+  contents: write
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Replace archive with source tree
+        run: |
+          mkdir source-tree
+          unzip -q boltpoint-marketplace-delivery-source.zip -d source-tree
+          rsync -a source-tree/ ./
+          rm -rf source-tree boltpoint-marketplace-delivery-source.zip
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Import production Marketplace Delivery source"
+          git push
