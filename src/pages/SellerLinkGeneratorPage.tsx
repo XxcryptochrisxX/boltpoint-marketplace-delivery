@@ -63,6 +63,7 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
   const [isProcessingPhotos, setIsProcessingPhotos] = useState(false);
 
   const [generatedLink, setGeneratedLink] = useState<SellerDeliveryLink | null>(null);
+  const [showLinkPopup, setShowLinkPopup] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [allLinks, setAllLinks] = useState<SellerDeliveryLink[]>(() => getSellerDeliveryLinks());
 
@@ -98,6 +99,7 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
     });
 
     setGeneratedLink(newLink);
+    setShowLinkPopup(true);
     setAllLinks((current) => [newLink, ...current.filter((link) => link.id !== newLink.id)]);
     onShowToast('Confidential Link Created!', `Link #${newLink.id} is ready to send to prospective buyers.`, 'success');
     } catch (error) {
@@ -154,6 +156,71 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
           description: 'Sell furniture & large items on Facebook Marketplace without sharing your private home address. Send buyers an address-masked pickup delivery link.',
         }}
       />
+
+      {generatedLink && showLinkPopup && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/65 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="seller-link-ready-title"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setShowLinkPopup(false);
+          }}
+        >
+          <div className="relative w-full max-w-lg rounded-3xl border border-emerald-200 bg-white p-6 shadow-2xl sm:p-8">
+            <button
+              type="button"
+              onClick={() => setShowLinkPopup(false)}
+              className="absolute right-4 top-4 rounded-full p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900"
+              aria-label="Close link popup"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700">
+              <Check className="h-8 w-8" />
+            </div>
+            <p className="mb-2 text-xs font-extrabold uppercase tracking-wider text-emerald-700">Seller link created</p>
+            <h2 id="seller-link-ready-title" className="pr-8 text-2xl font-black text-slate-900">
+              Your link is ready to send
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-slate-600">
+              Share this private booking link with the buyer for <strong>{generatedLink.itemTitle}</strong>. Your exact pickup address remains protected.
+            </p>
+
+            <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <p className="break-all font-mono text-sm text-slate-700">{generateShareableSellerUrl(generatedLink)}</p>
+            </div>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={() => handleCopyLink(generatedLink)}
+                className="flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-3 font-bold text-white shadow-lg shadow-blue-500/20 transition-colors hover:bg-blue-700"
+              >
+                {copiedId === generatedLink.id ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                {copiedId === generatedLink.id ? 'Link Copied!' : 'Copy Buyer Link'}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleTestBuyerView(generatedLink)}
+                className="flex items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-3 font-bold text-slate-800 transition-colors hover:bg-slate-50"
+              >
+                <ExternalLink className="h-4 w-4 text-blue-600" />
+                Preview Buyer View
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowLinkPopup(false)}
+              className="mt-4 w-full py-2 text-sm font-semibold text-slate-500 hover:text-slate-800"
+            >
+              Close and continue managing links
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 space-y-10">
         
