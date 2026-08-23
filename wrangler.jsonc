@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "marketplace-delivery",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "r2_buckets": [
+    { "binding": "IMAGES", "bucket_name": "marketplace-delivery-images" }
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "marketplace-delivery",
+      "database_id": "597de8b0-90d6-466b-85ef-0d43ee5cc753",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "observability": { "enabled": true }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Marketplace Delivery",
+  "description": "Technology marketplace connecting buyers and sellers of oversized items with independent local delivery partners.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
