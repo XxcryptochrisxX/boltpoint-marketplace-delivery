@@ -35,9 +35,41 @@ interface Env {
 type CheckoutBooking = Omit<BookingDetails, 'id' | 'createdAt' | 'status'>;
 const PREFIX = '/marketplacedelivery';
 const APP_URL = 'https://boltpointlogistics.com/marketplacedelivery';
+const TERMS_VERSION = '2026-08-24';
+const PRIVACY_VERSION = '2026-08-24';
+const SESSION_COOKIE = 'bpl_seller_session';
 
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : 'Unexpected error.';
+
+function randomToken(bytes = 32) {
+  const value = new Uint8Array(bytes);
+  crypto.getRandomValues(value);
+  return Array.from(value, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function hashToken(token: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function publicSellerLink(link: SellerDeliveryLink) {
+  const { exactPickupAddress: _address, pickupGateCode: _gate, pickupInstructions: _instructions, sellerPhone: _phone, sellerEmail: _email, ...safe } = link;
+  return safe;
+}
+
+function cookieValue(request: Request, name: string) {
+  const match = request.headers.get('cookie')?.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+async function authenticatedAccount(request: Request, env: Env) {
+  const token = cookieValue(request, SESSION_COOKIE);
+  if (!token) return null;
+  return env.DB.prepare(`SELECT a.id, a.email, a.name, a.phone FROM seller_sessions s
+    JOIN seller_accounts a ON a.id = s.account_id
+    WHERE s.token_hash = ?1 AND s.expires_at > ?2`).bind(await hashToken(token), new Date().toISOString()).first<any>();
+}
 
 function required(value: unknown, label: string) {
   const clean = typeof value === 'string' ? value.trim() : '';
@@ -150,7 +182,8 @@ function decodeDataUrl(value: string) {
 
 async function createSellerLink(request: Request, env: Env) {
   const data = await request.json() as any;
-  const id = `SL-${Math.floor(100000 + Math.random() * 900000)}`;
+  const id = `SL-${String(parseInt(randomToken(4), 16) % 1000000).padStart(6, '0')}`;
+  const claimToken = randomToken();
   const photos: string[] = [];
   for (const [index, value] of (Array.isArray(data.itemPhotos) ? data.itemPhotos.slice(0, 6) : []).entries()) {
     const image = decodeDataUrl(value);
@@ -166,16 +199,99 @@ async function createSellerLink(request: Request, env: Env) {
     maskedDisplayLocation: `${cityState} (${String(data.pickupZip || '').slice(0, 5)}) • Verified Seller Location (Exact address protected)`,
     status: 'Active', createdAt: new Date().toISOString(), viewsCount: 0,
   };
-  await env.DB.prepare('INSERT INTO seller_links (id, data, status, views_count, created_at) VALUES (?1, ?2, ?3, 0, ?4)')
-    .bind(id, JSON.stringify(link), 'Active', link.createdAt).run();
-  return json(link, 201);
+  await env.DB.prepare('INSERT INTO seller_links (id, data, status, views_count, created_at, claim_token_hash, claim_expires_at) VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6)')
+    .bind(id, JSON.stringify(link), 'Active', link.createdAt, await hashToken(claimToken), new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()).run();
+  return json({ ...link, claimToken }, 201);
+}
+
+async function requestSellerLogin(request: Request, env: Env) {
+  const body = await request.json() as any;
+  const email = required(body.email, 'Email').toLowerCase().slice(0, 254);
+  const claimToken = typeof body.claimToken === 'string' ? body.claimToken : '';
+  let claimLinkId: string | null = null;
+  if (claimToken) {
+    if (body.termsAccepted !== true || body.termsVersion !== TERMS_VERSION || body.privacyVersion !== PRIVACY_VERSION) {
+      throw new Error('You must agree to the current Terms and acknowledge the Privacy Policy.');
+    }
+    const claim = await env.DB.prepare('SELECT id FROM seller_links WHERE claim_token_hash = ?1 AND claim_expires_at > ?2 AND owner_account_id IS NULL')
+      .bind(await hashToken(claimToken), new Date().toISOString()).first<any>();
+    if (!claim) throw new Error('This save-link invitation is invalid or expired.');
+    claimLinkId = claim.id;
+  }
+  const token = randomToken();
+  const now = new Date().toISOString();
+  await env.DB.prepare(`INSERT INTO seller_login_tokens (token_hash, email, claim_link_id, terms_version, privacy_version, expires_at, created_at)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`).bind(await hashToken(token), email, claimLinkId, claimLinkId ? TERMS_VERSION : null, claimLinkId ? PRIVACY_VERSION : null, new Date(Date.now() + 15 * 60 * 1000).toISOString(), now).run();
+  if (!env.RESEND_API_KEY || !env.EMAIL_FROM) throw new Error('Seller sign-in email is not configured yet.');
+  const action = claimLinkId ? 'save your delivery link and open your seller account' : 'sign in to your seller account';
+  await sendEmail(env, email, 'Your secure Bolt Point seller sign-in link', `Use this one-time link within 15 minutes to ${action}:\n\n${APP_URL}/api/seller-auth/verify?token=${token}\n\nIf you did not request this, you can ignore this email.`, `seller-login-${await hashToken(token)}`);
+  return json({ success: true, message: 'Check your email for a secure sign-in link.' });
+}
+
+async function verifySellerLogin(request: Request, env: Env) {
+  const token = new URL(request.url).searchParams.get('token') || '';
+  const tokenHash = await hashToken(token);
+  const now = new Date().toISOString();
+  const login = await env.DB.prepare('SELECT * FROM seller_login_tokens WHERE token_hash = ?1 AND used_at IS NULL AND expires_at > ?2').bind(tokenHash, now).first<any>();
+  if (!login) return Response.redirect(`${APP_URL}/?seller_auth=expired`, 302);
+  let account = await env.DB.prepare('SELECT * FROM seller_accounts WHERE email = ?1').bind(login.email).first<any>();
+  if (!account) {
+    const source = login.claim_link_id ? await env.DB.prepare('SELECT data FROM seller_links WHERE id = ?1').bind(login.claim_link_id).first<any>() : null;
+    const link = source ? JSON.parse(source.data) as SellerDeliveryLink : null;
+    const id = `SA-${randomToken(12)}`;
+    await env.DB.prepare('INSERT INTO seller_accounts (id, email, name, phone, email_verified_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?5)')
+      .bind(id, login.email, link?.sellerName || '', link?.sellerPhone || '', now).run();
+    account = { id, email: login.email, name: link?.sellerName || '', phone: link?.sellerPhone || '' };
+  } else {
+    await env.DB.prepare('UPDATE seller_accounts SET email_verified_at = ?1, updated_at = ?1 WHERE id = ?2').bind(now, account.id).run();
+  }
+  if (login.claim_link_id) {
+    await env.DB.prepare('UPDATE seller_links SET owner_account_id = ?1, claim_token_hash = NULL, claim_expires_at = NULL WHERE id = ?2 AND owner_account_id IS NULL').bind(account.id, login.claim_link_id).run();
+    await env.DB.prepare('INSERT INTO legal_acceptances (id, account_id, terms_version, privacy_version, accepted_at) VALUES (?1, ?2, ?3, ?4, ?5)')
+      .bind(`LA-${randomToken(12)}`, account.id, login.terms_version, login.privacy_version, now).run();
+  }
+  await env.DB.prepare('UPDATE seller_login_tokens SET used_at = ?1 WHERE token_hash = ?2').bind(now, tokenHash).run();
+  const sessionToken = randomToken();
+  await env.DB.prepare('INSERT INTO seller_sessions (token_hash, account_id, expires_at, created_at) VALUES (?1, ?2, ?3, ?4)')
+    .bind(await hashToken(sessionToken), account.id, new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), now).run();
+  return new Response(null, { status: 302, headers: { location: `${APP_URL}/?seller_account=verified`, 'set-cookie': `${SESSION_COOKIE}=${sessionToken}; HttpOnly; Secure; SameSite=Lax; Path=${PREFIX}; Max-Age=2592000` } });
+}
+
+async function sellerAccountRoutes(request: Request, env: Env, path: string) {
+  if (request.method === 'POST' && path === '/api/seller-auth/request-link') return requestSellerLogin(request, env);
+  if (request.method === 'GET' && path === '/api/seller-auth/verify') return verifySellerLogin(request, env);
+  if (request.method === 'POST' && path === '/api/seller-auth/logout') return new Response(JSON.stringify({ success: true }), { headers: { 'content-type': 'application/json', 'set-cookie': `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=${PREFIX}; Max-Age=0` } });
+  const account = await authenticatedAccount(request, env);
+  if (request.method === 'GET' && path === '/api/seller/me') {
+    if (!account) return json({ error: 'Sign in required.' }, 401);
+    const result = await env.DB.prepare('SELECT data, status, views_count FROM seller_links WHERE owner_account_id = ?1 ORDER BY created_at DESC').bind(account.id).all<any>();
+    return json({ ...account, links: (result.results || []).map((row) => ({ ...JSON.parse(row.data), status: row.status, viewsCount: row.views_count })) });
+  }
+  const match = path.match(/^\/api\/seller\/links\/(SL-\d{6})$/i);
+  if (request.method === 'PATCH' && match) {
+    if (!account) return json({ error: 'Sign in required.' }, 401);
+    const { status } = await request.json() as any;
+    if (!['Active', 'Paused', 'Expired'].includes(status)) return json({ error: 'Invalid link status.' }, 400);
+    const row = await env.DB.prepare('SELECT data FROM seller_links WHERE id = ?1 AND owner_account_id = ?2').bind(match[1].toUpperCase(), account.id).first<any>();
+    if (!row) return json({ error: 'Link not found.' }, 404);
+    const data = { ...JSON.parse(row.data), status };
+    await env.DB.prepare('UPDATE seller_links SET status = ?1, data = ?2 WHERE id = ?3 AND owner_account_id = ?4').bind(status, JSON.stringify(data), match[1].toUpperCase(), account.id).run();
+    return json(data);
+  }
+  return null;
 }
 
 async function sellerRoutes(request: Request, env: Env, path: string) {
   if (request.method === 'POST' && path === '/api/seller-links') return createSellerLink(request, env);
-  if (request.method === 'GET' && path === '/api/seller-links') {
-    const result = await env.DB.prepare('SELECT data, views_count, status FROM seller_links ORDER BY created_at DESC LIMIT 100').all<any>();
-    return json((result.results || []).map((row) => ({ ...JSON.parse(row.data), viewsCount: row.views_count, status: row.status })));
+  if (request.method === 'GET' && path === '/api/seller-links') return json({ error: 'Sign in required.' }, 401);
+  const routeMatch = path.match(/^\/api\/seller-links\/(SL-\d{6})\/calculate-distance$/i);
+  if (request.method === 'POST' && routeMatch) {
+    const { destination } = await request.json() as any;
+    if (!isFullStreetAddress(destination)) return json({ success: false, error: 'Enter a full delivery street address, including city, state, and ZIP code.' }, 400);
+    const stored = await env.DB.prepare('SELECT data, status FROM seller_links WHERE id = ?1').bind(routeMatch[1].toUpperCase()).first<any>();
+    if (!stored || stored.status !== 'Active') return json({ error: 'This seller link is not active.' }, 404);
+    const link = JSON.parse(stored.data) as SellerDeliveryLink;
+    return json({ success: true, ...(await calculateRoadRoute(env, link.exactPickupAddress!, destination)), source: 'google_routes' });
   }
   const match = path.match(/^\/api\/seller-links\/(SL-\d{6})(\/view)?$/i);
   if (!match) return null;
@@ -184,10 +300,16 @@ async function sellerRoutes(request: Request, env: Env, path: string) {
     return json({ success: true });
   }
   const row = await env.DB.prepare('SELECT data, views_count, status FROM seller_links WHERE id = ?1').bind(match[1].toUpperCase()).first<any>();
-  return row ? json({ ...JSON.parse(row.data), viewsCount: row.views_count, status: row.status }) : json({ error: 'Seller link not found.' }, 404);
+  return row && row.status === 'Active' ? json({ ...publicSellerLink(JSON.parse(row.data)), viewsCount: row.views_count, status: row.status }) : json({ error: 'Seller link not found or inactive.' }, 404);
 }
 
 async function api(request: Request, env: Env, path: string) {
+  try {
+    const accountResponse = await sellerAccountRoutes(request, env, path);
+    if (accountResponse) return accountResponse;
+  } catch (error) {
+    return json({ error: errorMessage(error) }, 400);
+  }
   const sellerResponse = await sellerRoutes(request, env, path);
   if (sellerResponse) return sellerResponse;
   if (request.method === 'GET' && path.startsWith('/api/images/')) {
@@ -207,10 +329,18 @@ async function api(request: Request, env: Env, path: string) {
     try {
       const input = await request.json() as CheckoutBooking;
       const quote = input.quote as QuoteInput;
-      if (!isFullStreetAddress(quote.pickupZip) || !isFullStreetAddress(quote.deliveryZip)) throw new Error('Complete pickup and delivery addresses are required.');
-      const route = await calculateRoadRoute(env, quote.pickupZip, quote.deliveryZip);
+      let pickupAddress = quote.pickupZip;
+      let sellerLink: SellerDeliveryLink | null = null;
+      if (input.sellerLinkId) {
+        const stored = await env.DB.prepare('SELECT data, status FROM seller_links WHERE id = ?1').bind(input.sellerLinkId.toUpperCase()).first<any>();
+        if (!stored || stored.status !== 'Active') throw new Error('This seller link is no longer active.');
+        sellerLink = JSON.parse(stored.data);
+        pickupAddress = sellerLink!.exactPickupAddress!;
+      }
+      if (!isFullStreetAddress(pickupAddress) || !isFullStreetAddress(quote.deliveryZip)) throw new Error('Complete pickup and delivery addresses are required.');
+      const route = await calculateRoadRoute(env, pickupAddress, quote.deliveryZip);
       const verifiedQuote = calculateQuote({ ...quote, accurateMiles: route.miles, drivingDuration: route.duration, isOpenStreetMapVerified: true });
-      const booking = { ...input, itemPhotos: [], quote, quoteResult: verifiedQuote } as CheckoutBooking;
+      const booking = { ...input, pickupAddress, sellerName: sellerLink?.sellerName || input.sellerName, sellerPhone: sellerLink?.sellerPhone || input.sellerPhone, itemPhotos: [], quote: { ...quote, pickupZip: pickupAddress }, quoteResult: verifiedQuote } as CheckoutBooking;
       required(booking.customerName, 'Customer name'); required(booking.customerPhone, 'Customer phone'); required(booking.customerEmail, 'Customer email');
       const payout = driverPayout(verifiedQuote.vehicleTypeRecommended, verifiedQuote.estimatedMiles);
       const session = await stripe.checkout.sessions.create({
@@ -236,6 +366,7 @@ async function api(request: Request, env: Env, path: string) {
       if (event.type === 'checkout.session.completed' && event.data.object.payment_status === 'paid') {
         const session = event.data.object, booking = fromMetadata(session.metadata || {}), orderNumber = `BPL-${session.id.slice(-10).toUpperCase()}`, amount = (session.amount_total || 0) / 100;
         const shipday = await dispatchToShipday(env, booking, orderNumber, amount);
+        if (booking.sellerLinkId) await env.DB.prepare('UPDATE seller_links SET status = ?1 WHERE id = ?2').bind('Booked', booking.sellerLinkId).run();
         const summary = `Delivery ${orderNumber} is paid and sent to dispatch.\nPickup: ${booking.pickupAddress}\nDelivery: ${booking.deliveryAddress}\nTotal: $${amount.toFixed(2)}`;
         await Promise.all([sendEmail(env, booking.customerEmail, `Delivery confirmed: ${orderNumber}`, summary, `${event.id}-customer`), env.BUSINESS_EMAIL ? sendEmail(env, env.BUSINESS_EMAIL, `New paid delivery: ${orderNumber}`, `${summary}\nShipday order: ${shipday.orderId || 'created'}`, `${event.id}-business`) : undefined]);
       }
