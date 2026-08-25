@@ -50,7 +50,7 @@ export function SellerAccountPage({ onNavigate, onShowToast, justVerified = fals
           <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-center">
             <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-600" />
             <h2 className="mt-3 text-lg font-black text-slate-900">Confirmation email sent</h2>
-            <p className="mt-2 text-sm leading-relaxed text-slate-600">We sent a secure sign-in link to <strong>{emailSentTo}</strong>. Click it within 15 minutes and we’ll automatically open your seller workspace.</p>
+            <p className="mt-2 text-sm leading-relaxed text-slate-600">We sent a secure sign-in link to <strong>{emailSentTo}</strong>. Click it within 30 minutes and we’ll automatically open your seller workspace with all previous listings.</p>
             <button type="button" onClick={() => setEmailSentTo('')} className="mt-4 text-sm font-bold text-blue-700 underline">Use a different email</button>
           </div>
         ) : <form onSubmit={signIn} className="mt-6 space-y-4">
