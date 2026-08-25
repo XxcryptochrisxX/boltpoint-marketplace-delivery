@@ -34,7 +34,7 @@ export const VEHICLE_TYPES = [
 export const BUSINESS_TARGETS = [
   {
     title: 'Furniture Stores',
-    description: 'Provide instant, reliable same-day delivery to your customers without managing a fleet.',
+    description: 'Provide reliable 1–2 day local delivery to your customers without managing a fleet.',
     iconName: 'Armchair',
   },
   {
@@ -98,7 +98,7 @@ export const FAQ_DATA: FAQItem[] = [
     id: 'faq-5',
     category: 'Delivery & Setup',
     question: 'Can I schedule delivery for a future date or specific time window?',
-    answer: 'Absolutely. You can schedule immediate express delivery (under 90 mins) or pick any future date and 1-hour arrival window that fits your schedule.',
+    answer: 'Absolutely. Standard delivery is completed within 1–2 days, and you can select a preferred date and arrival window during checkout.',
   },
   {
     id: 'faq-6',
