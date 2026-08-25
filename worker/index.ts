@@ -366,11 +366,41 @@ async function sellerAccountRoutes(request: Request, env: Env, path: string) {
   const match = path.match(/^\/api\/seller\/links\/(SL-\d{6})$/i);
   if (request.method === 'PATCH' && match) {
     if (!account) return json({ error: 'Sign in required.' }, 401);
-    const { status } = await request.json() as any;
-    if (!['Active', 'Paused', 'Expired'].includes(status)) return json({ error: 'Invalid link status.' }, 400);
-    const row = await env.DB.prepare('SELECT data FROM seller_links WHERE id = ?1 AND owner_account_id = ?2').bind(match[1].toUpperCase(), account.id).first<any>();
+    const input = await request.json() as any;
+    const row = await env.DB.prepare('SELECT data, status FROM seller_links WHERE id = ?1 AND owner_account_id = ?2').bind(match[1].toUpperCase(), account.id).first<any>();
     if (!row) return json({ error: 'Link not found.' }, 404);
-    const data = { ...JSON.parse(row.data), status };
+    const editableFields = ['itemTitle', 'itemType', 'askingPrice', 'itemDescription', 'sellerName', 'sellerPhone', 'sellerEmail', 'pickupAvailability', 'pickupInstructions', 'pickupGateCode', 'payer'];
+    const hasListingEdits = editableFields.some((field) => Object.prototype.hasOwnProperty.call(input, field));
+    if (row.status === 'Booked' && (hasListingEdits || input.status)) return json({ error: 'This listing is locked because a buyer has completed checkout.' }, 409);
+    const status = input.status === undefined ? row.status : input.status;
+    if (!['Active', 'Paused', 'Expired'].includes(status)) return json({ error: 'Invalid link status.' }, 400);
+    const current = JSON.parse(row.data) as SellerDeliveryLink;
+    const data: any = { ...current, status };
+    const requiredText: Record<string, number> = { itemTitle: 140, sellerName: 100, sellerPhone: 30 };
+    for (const [field, maxLength] of Object.entries(requiredText)) {
+      if (!Object.prototype.hasOwnProperty.call(input, field)) continue;
+      const value = String(input[field] || '').trim().slice(0, maxLength);
+      if (!value) return json({ error: `${field === 'itemTitle' ? 'Item title' : field === 'sellerName' ? 'Seller name' : 'Seller phone'} is required.` }, 400);
+      data[field] = value;
+    }
+    const optionalText: Record<string, number> = { itemDescription: 1000, sellerEmail: 254, pickupAvailability: 300, pickupInstructions: 500, pickupGateCode: 100 };
+    for (const [field, maxLength] of Object.entries(optionalText)) {
+      if (Object.prototype.hasOwnProperty.call(input, field)) data[field] = String(input[field] || '').trim().slice(0, maxLength) || undefined;
+    }
+    if (Object.prototype.hasOwnProperty.call(input, 'askingPrice')) {
+      const price = input.askingPrice === '' || input.askingPrice == null ? undefined : Number(input.askingPrice);
+      if (price !== undefined && (!Number.isFinite(price) || price < 0 || price > 1000000)) return json({ error: 'Enter a valid asking price.' }, 400);
+      data.askingPrice = price;
+    }
+    if (Object.prototype.hasOwnProperty.call(input, 'itemType')) {
+      const itemTypes = ['Sofa', 'Sectional', 'Dining Table', 'Mattress', 'Desk', 'Dresser', 'Appliance', 'Exercise Equipment', 'Other'];
+      if (!itemTypes.includes(input.itemType)) return json({ error: 'Invalid item category.' }, 400);
+      data.itemType = input.itemType;
+    }
+    if (Object.prototype.hasOwnProperty.call(input, 'payer')) {
+      if (!['buyer_pays', 'seller_pays', 'split_50_50'].includes(input.payer)) return json({ error: 'Invalid delivery payment model.' }, 400);
+      data.payer = input.payer;
+    }
     await env.DB.prepare('UPDATE seller_links SET status = ?1, data = ?2 WHERE id = ?3 AND owner_account_id = ?4').bind(status, JSON.stringify(data), match[1].toUpperCase(), account.id).run();
     return json(data);
   }
