@@ -29,6 +29,7 @@ import {
   Truck,
   Sparkles,
   ArrowRight,
+  ArrowLeft,
   MessageSquare,
   Upload,
   X
@@ -42,6 +43,7 @@ interface SellerLinkGeneratorPageProps {
 
 export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerLink }: SellerLinkGeneratorPageProps) {
   const [activeTab, setActiveTab] = useState<'create' | 'manage' | 'guide'>('create');
+  const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1);
   
   // Form State
   const [sellerName, setSellerName] = useState('');
@@ -120,6 +122,22 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
     } catch (error) {
       onShowToast('Unable to Create Account', error instanceof Error ? error.message : 'Please try again.', 'error');
     } finally { setIsSendingAccountLink(false); }
+  };
+
+  const continueFromItem = () => {
+    if (!itemTitle.trim()) {
+      onShowToast('Add Your Item', 'Enter a listing title before continuing.', 'error');
+      return;
+    }
+    setWizardStep(2);
+  };
+
+  const continueFromPickup = () => {
+    if (!isCompleteAddressParts(pickupAddressParts)) {
+      onShowToast('Complete Pickup Address', 'Select or enter a complete street address, city, state, and ZIP code.', 'error');
+      return;
+    }
+    setWizardStep(3);
   };
 
   const handlePhotoUpload = async (files: FileList | null) => {
@@ -375,9 +393,21 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
               </div>
 
               <form onSubmit={handleCreateLink} className="space-y-6">
-                
+                <div className="grid grid-cols-3 gap-2" aria-label={`Step ${wizardStep} of 3`}>
+                  {[
+                    { number: 1, label: 'Item' },
+                    { number: 2, label: 'Pickup' },
+                    { number: 3, label: 'Contact' },
+                  ].map((step) => (
+                    <button key={step.number} type="button" onClick={() => step.number < wizardStep && setWizardStep(step.number as 1 | 2 | 3)} className={`rounded-xl border px-2 py-2.5 text-center transition-colors ${wizardStep === step.number ? 'border-blue-600 bg-blue-600 text-white shadow-md' : step.number < wizardStep ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-slate-200 bg-slate-50 text-slate-400'}`}>
+                      <span className="block text-[10px] font-black uppercase tracking-wider">Step {step.number}</span>
+                      <span className="block text-xs font-bold sm:text-sm">{step.label}</span>
+                    </button>
+                  ))}
+                </div>
+
                 {/* Section 1: Item Information */}
-                <div className="space-y-4">
+                <div className={`${wizardStep === 1 ? 'block' : 'hidden'} space-y-5 rounded-2xl border border-blue-100 bg-white p-4 shadow-sm sm:p-6`}>
                   <span className="text-xs font-bold text-blue-600 uppercase tracking-wider flex items-center gap-1.5">
                     <Package className="w-3.5 h-3.5" />
                     <span>1. Item Details</span>
@@ -456,10 +486,13 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
                       <p className="mt-2 text-[11px] text-slate-500">Upload up to 6 images, up to 10 MB each.</p>
                     </div>
                   </div>
+                  <button type="button" onClick={continueFromItem} className="flex w-full items-center justify-center gap-2 rounded-full bg-blue-600 px-5 py-3.5 text-sm font-black text-white shadow-lg shadow-blue-500/20 hover:bg-blue-700">
+                    Next: Private Pickup <ArrowRight className="h-4 w-4" />
+                  </button>
                 </div>
 
                 {/* Section 2: Confidential Pickup Details */}
-                <div className="space-y-4 pt-4 border-t border-slate-100">
+                <div className={`${wizardStep === 2 ? 'block' : 'hidden'} space-y-5 rounded-2xl border border-emerald-100 bg-white p-4 shadow-sm sm:p-6`}>
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-emerald-600 uppercase tracking-wider flex items-center gap-1.5">
                       <Lock className="w-3.5 h-3.5" />
@@ -518,10 +551,14 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
                       />
                     </div>
                   </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button type="button" onClick={() => setWizardStep(1)} className="flex items-center justify-center gap-2 rounded-full border border-slate-300 bg-white px-4 py-3.5 text-sm font-bold text-slate-700 hover:bg-slate-50"><ArrowLeft className="h-4 w-4" /> Back</button>
+                    <button type="button" onClick={continueFromPickup} className="flex items-center justify-center gap-2 rounded-full bg-blue-600 px-4 py-3.5 text-sm font-black text-white shadow-lg shadow-blue-500/20 hover:bg-blue-700">Next: Contact <ArrowRight className="h-4 w-4" /></button>
+                  </div>
                 </div>
 
                 {/* Section 3: Seller Contact Details */}
-                <div className="space-y-4 pt-4 border-t border-slate-100">
+                <div className={`${wizardStep === 3 ? 'block' : 'hidden'} space-y-5 rounded-2xl border border-blue-100 bg-white p-4 shadow-sm sm:p-6`}>
                   <span className="text-xs font-bold text-blue-600 uppercase tracking-wider flex items-center gap-1.5">
                     <Phone className="w-3.5 h-3.5" />
                     <span>3. Seller Contact & Dispatch Coordination</span>
@@ -556,10 +593,9 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
                       />
                     </div>
                   </div>
-                </div>
 
-                {/* Section 4: Who Pays Delivery Fee */}
-                <div className="space-y-3 pt-4 border-t border-slate-100">
+                {/* Delivery payment choice */}
+                <div className="space-y-3 border-t border-slate-100 pt-4">
                   <label className="block text-xs font-semibold text-slate-700">
                     Delivery Payment Model
                   </label>
@@ -611,14 +647,13 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
                   </div>
                 </div>
 
-                <button
-                  type="submit"
-                  className="w-full py-3.5 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-base shadow-lg shadow-blue-500/25 hover:shadow-xl hover:shadow-blue-500/35 transition-all flex items-center justify-center gap-2 active:scale-[0.99]"
-                >
-                  <Lock className="w-5 h-5" />
-                  <span>Generate Confidential Seller Link</span>
-                  <ArrowRight className="w-5 h-5" />
-                </button>
+                  <div className="grid gap-3 sm:grid-cols-[auto,1fr]">
+                    <button type="button" onClick={() => setWizardStep(2)} className="flex items-center justify-center gap-2 rounded-full border border-slate-300 bg-white px-5 py-3.5 text-sm font-bold text-slate-700 hover:bg-slate-50"><ArrowLeft className="h-4 w-4" /> Back</button>
+                    <button type="submit" className="flex w-full items-center justify-center gap-2 rounded-full bg-blue-600 px-5 py-3.5 text-base font-bold text-white shadow-lg shadow-blue-500/25 transition-all hover:bg-blue-700 hover:shadow-xl hover:shadow-blue-500/35 active:scale-[0.99]">
+                      <Lock className="w-5 h-5" /><span>Generate Confidential Seller Link</span><ArrowRight className="w-5 h-5" />
+                    </button>
+                  </div>
+                </div>
 
               </form>
             </div>
