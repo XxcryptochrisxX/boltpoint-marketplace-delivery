@@ -106,12 +106,20 @@ function fromMetadata(metadata: Stripe.Metadata): CheckoutBooking {
 
 async function sendEmail(env: Env, to: string, subject: string, text: string, key: string) {
   if (!env.RESEND_API_KEY || !env.EMAIL_FROM) return;
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': key },
-    body: JSON.stringify({ from: env.EMAIL_FROM, to: [to], subject, text }),
-  });
-  if (!response.ok) throw new Error(`Email failed (${response.status}).`);
+  let lastError = 'Unknown email provider error.';
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': key },
+      body: JSON.stringify({ from: env.EMAIL_FROM, to: [to], subject, text }),
+    });
+    if (response.ok) return;
+    const detail = await response.text().catch(() => '');
+    lastError = `Email provider rejected the message (${response.status})${detail ? `: ${detail.slice(0, 300)}` : ''}`;
+    console.error(lastError);
+    if (response.status < 500 && response.status !== 429) break;
+  }
+  throw new Error(lastError);
 }
 
 async function dispatchToShipday(env: Env, booking: CheckoutBooking, orderNumber: string, amount: number) {
@@ -288,7 +296,7 @@ async function createSellerLink(request: Request, env: Env) {
     status: 'Active', createdAt: new Date().toISOString(), viewsCount: 0,
   };
   await env.DB.prepare('INSERT INTO seller_links (id, data, status, views_count, created_at, claim_token_hash, claim_expires_at) VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6)')
-    .bind(id, JSON.stringify(link), 'Active', link.createdAt, await hashToken(claimToken), new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()).run();
+    .bind(id, JSON.stringify(link), 'Active', link.createdAt, await hashToken(claimToken), '9999-12-31T23:59:59.999Z').run();
   return json({ ...link, claimToken }, 201);
 }
 
@@ -301,19 +309,21 @@ async function requestSellerLogin(request: Request, env: Env) {
     if (body.termsAccepted !== true || body.termsVersion !== TERMS_VERSION || body.privacyVersion !== PRIVACY_VERSION) {
       throw new Error('You must agree to the current Terms and acknowledge the Privacy Policy.');
     }
-    const claim = await env.DB.prepare('SELECT id FROM seller_links WHERE claim_token_hash = ?1 AND claim_expires_at > ?2 AND owner_account_id IS NULL')
-      .bind(await hashToken(claimToken), new Date().toISOString()).first<any>();
-    if (!claim) throw new Error('This save-link invitation is invalid or expired.');
+    const claim = await env.DB.prepare('SELECT id FROM seller_links WHERE claim_token_hash = ?1 AND owner_account_id IS NULL')
+      .bind(await hashToken(claimToken)).first<any>();
+    if (!claim) throw new Error('This listing has already been saved to an account or the invitation is invalid.');
     claimLinkId = claim.id;
   }
   const token = randomToken();
   const now = new Date().toISOString();
+  const expiresAt = claimLinkId ? '9999-12-31T23:59:59.999Z' : new Date(Date.now() + 30 * 60 * 1000).toISOString();
   await env.DB.prepare(`INSERT INTO seller_login_tokens (token_hash, email, claim_link_id, terms_version, privacy_version, expires_at, created_at)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`).bind(await hashToken(token), email, claimLinkId, claimLinkId ? TERMS_VERSION : null, claimLinkId ? PRIVACY_VERSION : null, new Date(Date.now() + 15 * 60 * 1000).toISOString(), now).run();
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`).bind(await hashToken(token), email, claimLinkId, claimLinkId ? TERMS_VERSION : null, claimLinkId ? PRIVACY_VERSION : null, expiresAt, now).run();
   if (!env.RESEND_API_KEY || !env.EMAIL_FROM) throw new Error('Seller sign-in email is not configured yet.');
   const action = claimLinkId ? 'save your delivery link and open your seller account' : 'sign in to your seller account';
-  await sendEmail(env, email, claimLinkId ? 'Confirm your Bolt Point seller account' : 'Your secure Bolt Point seller sign-in link', `Confirm your email to ${action}:\n\n${APP_URL}/api/seller-auth/verify?token=${token}\n\nThis secure link expires in 15 minutes. After you click it, we will automatically open your seller workspace with your saved listings.\n\nIf you did not request this, you can ignore this email.`, `seller-login-${await hashToken(token)}`);
-  return json({ success: true, message: `Confirmation email sent to ${email}. Open it within 15 minutes to continue.` });
+  const timing = claimLinkId ? 'This one-time account confirmation link does not expire.' : 'This secure sign-in link expires in 30 minutes.';
+  await sendEmail(env, email, claimLinkId ? 'Confirm your Bolt Point seller account' : 'Your secure Bolt Point seller sign-in link', `Confirm your email to ${action}:\n\n${APP_URL}/api/seller-auth/verify?token=${token}\n\n${timing} After you click it, we will automatically open your seller workspace with all saved listings.\n\nIf you did not request this, you can ignore this email.`, `seller-login-${await hashToken(token)}`);
+  return json({ success: true, message: `Email sent to ${email}. ${claimLinkId ? 'Your one-time account confirmation link will not expire.' : 'Open the secure sign-in link within 30 minutes.'}` });
 }
 
 async function verifySellerLogin(request: Request, env: Env) {
@@ -349,8 +359,8 @@ async function verifySellerLogin(request: Request, env: Env) {
   await env.DB.prepare('UPDATE seller_login_tokens SET used_at = ?1 WHERE token_hash = ?2').bind(now, tokenHash).run();
   const sessionToken = randomToken();
   await env.DB.prepare('INSERT INTO seller_sessions (token_hash, account_id, expires_at, created_at) VALUES (?1, ?2, ?3, ?4)')
-    .bind(await hashToken(sessionToken), account.id, new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), now).run();
-  return new Response(null, { status: 302, headers: { location: `${APP_URL}/?seller_account=verified`, 'set-cookie': `${SESSION_COOKIE}=${sessionToken}; HttpOnly; Secure; SameSite=Lax; Path=${PREFIX}; Max-Age=2592000` } });
+    .bind(await hashToken(sessionToken), account.id, new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(), now).run();
+  return new Response(null, { status: 302, headers: { location: `${APP_URL}/?seller_account=verified`, 'set-cookie': `${SESSION_COOKIE}=${sessionToken}; HttpOnly; Secure; SameSite=Lax; Path=${PREFIX}; Max-Age=31536000` } });
 }
 
 async function sellerAccountRoutes(request: Request, env: Env, path: string) {
