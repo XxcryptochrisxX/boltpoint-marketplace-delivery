@@ -18,6 +18,7 @@ import { CustomerDashboardPage } from './pages/CustomerDashboardPage';
 import { DriverDashboardPage } from './pages/DriverDashboardPage';
 import { AdminDashboardPage } from './pages/AdminDashboardPage';
 import { SellerLinkGeneratorPage } from './pages/SellerLinkGeneratorPage';
+import { SellerAccountPage } from './pages/SellerAccountPage';
 import { LegalPage } from './pages/LegalPage';
 
 export default function App() {
@@ -32,6 +33,8 @@ export default function App() {
       const params = new URLSearchParams(window.location.search);
       if (params.get('seller_link') || params.get('checkout')) {
         setActiveView('book-now');
+      } else if (params.get('seller_account')) {
+        setActiveView('seller-account');
       } else if (params.get('view') === 'for-sellers') {
         setActiveView('for-sellers');
       }
@@ -100,6 +103,8 @@ export default function App() {
             onOpenSellerLink={handleOpenSellerLinkBooking}
           />
         )}
+
+        {activeView === 'seller-account' && <SellerAccountPage onNavigate={setActiveView} onShowToast={showToast} />}
 
         {activeView === 'become-driver' && (
           <BecomeDriverPage onNavigate={setActiveView} onShowToast={showToast} />
