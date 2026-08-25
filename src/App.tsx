@@ -26,6 +26,7 @@ export default function App() {
   const [currentQuoteInput, setCurrentQuoteInput] = useState<QuoteInput | null>(null);
   const [activeSellerLink, setActiveSellerLink] = useState<SellerDeliveryLink | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [sellerAccountVerified, setSellerAccountVerified] = useState(false);
 
   // Check URL query parameters on initial mount (e.g. ?seller_link=... or ?view=for-sellers)
   useEffect(() => {
@@ -35,6 +36,7 @@ export default function App() {
         setActiveView('book-now');
       } else if (params.get('seller_account')) {
         setActiveView('seller-account');
+        setSellerAccountVerified(params.get('seller_account') === 'verified');
       } else if (params.get('view') === 'for-sellers') {
         setActiveView('for-sellers');
       }
@@ -104,7 +106,7 @@ export default function App() {
           />
         )}
 
-        {activeView === 'seller-account' && <SellerAccountPage onNavigate={setActiveView} onShowToast={showToast} />}
+        {activeView === 'seller-account' && <SellerAccountPage onNavigate={setActiveView} onShowToast={showToast} justVerified={sellerAccountVerified} />}
 
         {activeView === 'become-driver' && (
           <BecomeDriverPage onNavigate={setActiveView} onShowToast={showToast} />
