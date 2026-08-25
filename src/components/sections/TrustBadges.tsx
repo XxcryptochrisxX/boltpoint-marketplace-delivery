@@ -25,8 +25,8 @@ export function TrustBadges() {
         {/* Value Highlights */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-8 pt-6 border-t border-slate-200/60 text-center">
           <div className="flex flex-col items-center">
-            <span className="font-bold text-slate-900 text-lg sm:text-xl">Same-Day</span>
-            <span className="text-xs text-slate-500">Under 2-Hour Pickup</span>
+            <span className="font-bold text-slate-900 text-lg sm:text-xl">24–48 Hour</span>
+            <span className="text-xs text-slate-500">Delivery</span>
           </div>
           <div className="flex flex-col items-center">
             <span className="font-bold text-slate-900 text-lg sm:text-xl">Documented</span>
