@@ -171,6 +171,43 @@ async function calculateRoadRoute(env: Env, origin: string, destination: string)
   return { miles, durationMinutes, duration: `${durationMinutes} mins`, originFormatted: from.displayName, destinationFormatted: to.displayName };
 }
 
+async function googleAddressSuggestions(env: Env, input: string, sessionToken?: string) {
+  if (!env.GOOGLE_MAPS_API_KEY) throw new Error('Google Maps is not configured.');
+  const response = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': env.GOOGLE_MAPS_API_KEY, 'X-Goog-FieldMask': 'suggestions.placePrediction.placeId,suggestions.placePrediction.text.text' },
+    body: JSON.stringify({ input, sessionToken, includedRegionCodes: ['us'] }),
+  });
+  const data = await response.json() as any;
+  if (!response.ok) throw new Error(data?.error?.message || 'Google could not suggest addresses.');
+  return (data.suggestions || []).flatMap((suggestion: any) => suggestion.placePrediction ? [{ placeId: suggestion.placePrediction.placeId, description: suggestion.placePrediction.text?.text }] : []).slice(0, 5);
+}
+
+async function googleAddressDetails(env: Env, placeId: string, sessionToken?: string) {
+  if (!env.GOOGLE_MAPS_API_KEY) throw new Error('Google Maps is not configured.');
+  const url = new URL(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`);
+  if (sessionToken) url.searchParams.set('sessionToken', sessionToken);
+  const response = await fetch(url, {
+    headers: { 'X-Goog-Api-Key': env.GOOGLE_MAPS_API_KEY, 'X-Goog-FieldMask': 'formattedAddress,addressComponents' },
+  });
+  const data = await response.json() as any;
+  if (!response.ok) throw new Error(data?.error?.message || 'Google could not load this address.');
+  const component = (type: string) => data.addressComponents?.find((item: any) => item.types?.includes(type));
+  const streetNumber = component('street_number')?.longText || '';
+  const route = component('route')?.longText || '';
+  const city = component('locality')?.longText || component('postal_town')?.longText || component('sublocality')?.longText || '';
+  return {
+    formattedAddress: data.formattedAddress,
+    parts: {
+      street: [streetNumber, route].filter(Boolean).join(' '),
+      unit: component('subpremise')?.longText || '',
+      city,
+      state: component('administrative_area_level_1')?.shortText || '',
+      zip: component('postal_code')?.longText || '',
+    },
+  };
+}
+
 function decodeDataUrl(value: string) {
   const match = value.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
   if (!match) return null;
@@ -317,6 +354,20 @@ async function api(request: Request, env: Env, path: string) {
     return object ? new Response(object.body, { headers: { 'content-type': object.httpMetadata?.contentType || 'image/jpeg', 'cache-control': 'public, max-age=31536000, immutable', etag: object.httpEtag || '' } }) : new Response('Not found', { status: 404 });
   }
   if (request.method === 'GET' && path === '/api/health') return json({ status: 'ok', maps: Boolean(env.GOOGLE_MAPS_API_KEY), stripe: Boolean(env.STRIPE_SECRET_KEY), shipday: Boolean(env.SHIPDAY_API_KEY), email: Boolean(env.RESEND_API_KEY), storage: true });
+  if (request.method === 'POST' && path === '/api/address-suggestions') {
+    try {
+      const { input, sessionToken } = await request.json() as any;
+      const query = required(input, 'Address').slice(0, 200);
+      if (query.length < 3) return json({ suggestions: [] });
+      return json({ suggestions: await googleAddressSuggestions(env, query, sessionToken) });
+    } catch (error) { return json({ error: errorMessage(error) }, 422); }
+  }
+  if (request.method === 'POST' && path === '/api/address-details') {
+    try {
+      const { placeId, sessionToken } = await request.json() as any;
+      return json(await googleAddressDetails(env, required(placeId, 'Place ID'), sessionToken));
+    } catch (error) { return json({ error: errorMessage(error) }, 422); }
+  }
   if (request.method === 'POST' && path === '/api/calculate-distance') {
     const { origin, destination } = await request.json() as any;
     if (!isFullStreetAddress(origin) || !isFullStreetAddress(destination)) return json({ success: false, error: 'Enter both full street addresses, including city, state, and ZIP code.' }, 400);
