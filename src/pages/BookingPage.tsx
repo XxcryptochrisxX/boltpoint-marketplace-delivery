@@ -697,7 +697,7 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
                       <Loader2 className="w-3 h-3 animate-spin" /> Recalculating...
                     </span>
                   ) : (
-                    <span>{rawQuoteResult.estimatedMiles} Miles ({rawQuoteResult.drivingDuration || '15 mins'})</span>
+                    <span>{rawQuoteResult.estimatedMiles} Miles</span>
                   )}
                 </strong>
               </div>
@@ -706,8 +706,8 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
                 <strong className="text-slate-900">{rawQuoteResult.vehicleTypeRecommended}</strong>
               </div>
               <div className="flex justify-between text-slate-700">
-                <span className="text-slate-500">Arrival Window:</span>
-                <strong className="text-slate-900">{rawQuoteResult.estimatedDeliveryTime}</strong>
+                <span className="text-slate-500">Delivery Timing:</span>
+                <strong className="text-slate-900">1–2 Day Delivery</strong>
               </div>
             </div>
 
