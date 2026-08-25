@@ -266,9 +266,9 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
             <span>Built to Help Marketplace Sellers Close Faster</span>
           </div>
 
-          <h1 className="text-3xl sm:text-4xl md:text-5xl font-black text-slate-900 tracking-tight">
-            Close Your Marketplace Sale Faster <br className="hidden sm:inline" />
-            <span className="text-blue-600">Offer Secure Local Delivery</span>
+          <h1 className="font-black tracking-tight">
+            <span className="block whitespace-nowrap text-[clamp(1.55rem,5vw,3rem)] text-slate-900">Sell Your Listings Faster...</span>
+            <span className="mt-1 block text-[clamp(1.25rem,3.8vw,2.25rem)] text-blue-600">Offer secure, local delivery</span>
           </h1>
 
           <p className="text-slate-600 text-base sm:text-lg leading-relaxed">
