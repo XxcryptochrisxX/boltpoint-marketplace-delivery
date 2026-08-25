@@ -251,7 +251,7 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
                 <div className="mt-4 rounded-2xl border border-emerald-200 bg-white p-4 text-center shadow-sm" role="status">
                   <Check className="mx-auto h-9 w-9 rounded-full bg-emerald-100 p-2 text-emerald-700" />
                   <p className="mt-2 font-black text-slate-900">Confirmation email sent</p>
-                  <p className="mt-1 text-xs leading-relaxed text-slate-600">We sent a secure confirmation link to <strong>{accountEmail}</strong>. Open it within 15 minutes to finish creating your account.</p>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-600">We sent a one-time confirmation link to <strong>{accountEmail}</strong>. It will not expire. Once confirmed, your seller account and saved listings remain available whenever you sign in.</p>
                   <p className="mt-2 text-xs font-bold text-emerald-700">After confirmation, this site will automatically open your seller page with this listing saved.</p>
                   <p className="mt-3 text-[11px] text-slate-500">Don’t see it? Check your spam or promotions folder.</p>
                 </div>
