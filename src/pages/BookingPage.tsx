@@ -86,8 +86,8 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
         pickupZip: sellerLink.pickupZip,
         itemType: sellerLink.itemType,
       }));
-      setPickupAddress(sellerLink.exactPickupAddress);
-      setPickupParts(parseFullAddress(sellerLink.exactPickupAddress));
+      setPickupAddress(sellerLink.exactPickupAddress || sellerLink.maskedDisplayLocation);
+      setPickupParts(parseFullAddress(sellerLink.exactPickupAddress || ''));
       setSellerName(sellerLink.sellerName);
       setSellerPhone(sellerLink.sellerPhone);
       if (sellerLink.itemDescription) {
@@ -157,8 +157,16 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
     setIsRecalculatingRoute(true);
     try {
       setRouteError('');
-      const res = await getAccurateDeliveryDistance(pickup, delivery);
-      setPickupAddress(pickup);
+      const res = sellerLink && !sellerLink.exactPickupAddress
+        ? await fetch(`${import.meta.env.BASE_URL}api/seller-links/${encodeURIComponent(sellerLink.id)}/calculate-distance`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ destination: delivery }),
+          }).then(async (response) => {
+            const data = await response.json();
+            if (!response.ok || !data.success) throw new Error(data.error || 'Unable to confirm this route.');
+            return { miles: data.miles, durationFormatted: data.duration };
+          })
+        : await getAccurateDeliveryDistance(pickup, delivery);
+      setPickupAddress(sellerLink ? sellerLink.maskedDisplayLocation : pickup);
       setDeliveryAddress(delivery);
       setQuoteInput(prev => ({ ...prev, pickupZip: pickup, deliveryZip: delivery, accurateMiles: res.miles, drivingDuration: res.durationFormatted, isOpenStreetMapVerified: true }));
       setRouteConfirmed(true);
@@ -233,7 +241,7 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
         customerName,
         customerPhone,
         customerEmail,
-        pickupAddress: sellerLink?.exactPickupAddress || pickupAddress,
+        pickupAddress: sellerLink ? sellerLink.maskedDisplayLocation : pickupAddress,
         deliveryAddress,
         sellerName: sellerName || sellerLink?.sellerName || 'Seller (To Be Contacted)',
         sellerPhone: sellerPhone || sellerLink?.sellerPhone || 'N/A',

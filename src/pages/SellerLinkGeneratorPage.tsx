@@ -1,8 +1,8 @@
-import { useState, useEffect, FormEvent } from 'react';
-import { ViewMode, ItemCategory, SellerDeliveryLink } from '../types';
+import { useState, FormEvent } from 'react';
+import { ViewMode, ItemCategory, SellerDeliveryLink, CreatedSellerDeliveryLink } from '../types';
 import { ITEM_CATEGORIES, APP_NAME } from '../constants';
 import { formatCurrency } from '../lib/pricing';
-import { createSellerDeliveryLinkRemote, getSellerDeliveryLinks, getSellerDeliveryLinksRemote, generateShareableSellerUrl, generateMaskedLocationString } from '../lib/sellerLinkService';
+import { createSellerDeliveryLinkRemote, generateShareableSellerUrl, generateMaskedLocationString, requestSellerMagicLink } from '../lib/sellerLinkService';
 import { SEOHead } from '../components/common/SEOHead';
 import { AddressFields } from '../components/common/AddressFields';
 import { AddressParts, EMPTY_ADDRESS, formatFullAddress, isCompleteAddressParts } from '../lib/addressValidation';
@@ -62,14 +62,14 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
   const [itemPhotos, setItemPhotos] = useState<string[]>([]);
   const [isProcessingPhotos, setIsProcessingPhotos] = useState(false);
 
-  const [generatedLink, setGeneratedLink] = useState<SellerDeliveryLink | null>(null);
+  const [generatedLink, setGeneratedLink] = useState<CreatedSellerDeliveryLink | null>(null);
   const [showLinkPopup, setShowLinkPopup] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [allLinks, setAllLinks] = useState<SellerDeliveryLink[]>(() => getSellerDeliveryLinks());
-
-  useEffect(() => {
-    void getSellerDeliveryLinksRemote().then(setAllLinks).catch(() => undefined);
-  }, []);
+  const [allLinks, setAllLinks] = useState<SellerDeliveryLink[]>([]);
+  const [accountEmail, setAccountEmail] = useState('');
+  const [acceptedLegal, setAcceptedLegal] = useState(false);
+  const [isSendingAccountLink, setIsSendingAccountLink] = useState(false);
+  const [accountEmailSent, setAccountEmailSent] = useState(false);
 
   const handleCreateLink = async (e: FormEvent) => {
     e.preventDefault();
@@ -99,12 +99,27 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
     });
 
     setGeneratedLink(newLink);
+    setAccountEmail(newLink.sellerEmail || sellerEmail.trim());
+    setAcceptedLegal(false);
+    setAccountEmailSent(false);
     setShowLinkPopup(true);
     setAllLinks((current) => [newLink, ...current.filter((link) => link.id !== newLink.id)]);
     onShowToast('Confidential Link Created!', `Link #${newLink.id} is ready to send to prospective buyers.`, 'success');
     } catch (error) {
       onShowToast('Unable to Create Link', error instanceof Error ? error.message : 'Please try again.', 'error');
     }
+  };
+
+  const handleSaveToAccount = async () => {
+    if (!generatedLink?.claimToken || !accountEmail || !acceptedLegal) return;
+    setIsSendingAccountLink(true);
+    try {
+      const result = await requestSellerMagicLink({ email: accountEmail, claimToken: generatedLink.claimToken, termsAccepted: true });
+      setAccountEmailSent(true);
+      onShowToast('Check Your Email', result.message, 'success');
+    } catch (error) {
+      onShowToast('Unable to Create Account', error instanceof Error ? error.message : 'Please try again.', 'error');
+    } finally { setIsSendingAccountLink(false); }
   };
 
   const handlePhotoUpload = async (files: FileList | null) => {
@@ -152,8 +167,8 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
     <div className="min-h-screen bg-slate-50 py-10 sm:py-14">
       <SEOHead
         customMetadata={{
-          title: 'Confidential Seller Pickup Links | Marketplace Delivery',
-          description: 'Sell furniture & large items on Facebook Marketplace without sharing your private home address. Send buyers an address-masked pickup delivery link.',
+          title: 'Sell Faster with Secure Local Delivery | Marketplace Delivery',
+          description: 'Help marketplace buyers say yes by including simple, secure local delivery. Create a private delivery link with instant buyer pricing and a protected pickup address.',
         }}
       />
 
@@ -211,6 +226,26 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
               </button>
             </div>
 
+            <div className="mt-6 rounded-2xl border border-orange-200 bg-orange-50 p-4">
+              <h3 className="font-black text-slate-900">Save and manage this link</h3>
+              <p className="mt-1 text-xs leading-relaxed text-slate-600">Create your free seller account without re-entering your details. We’ll email you a secure sign-in link.</p>
+              {accountEmailSent ? (
+                <div className="mt-3 rounded-xl bg-white p-3 text-sm font-bold text-emerald-700">Email sent. Open it within 15 minutes to finish saving this link.</div>
+              ) : (
+                <div className="mt-3 space-y-3">
+                  <input type="email" required value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} placeholder="Your email address" className="w-full rounded-xl border border-orange-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-orange-500" />
+                  <label className="flex items-start gap-2 text-xs leading-relaxed text-slate-600">
+                    <input type="checkbox" checked={acceptedLegal} onChange={(event) => setAcceptedLegal(event.target.checked)} className="mt-0.5 h-4 w-4 accent-orange-600" />
+                    <span>I agree to the <button type="button" onClick={() => onNavigate('terms')} className="font-bold text-blue-700 underline">Terms of Service</button> and acknowledge the <button type="button" onClick={() => onNavigate('privacy')} className="font-bold text-blue-700 underline">Privacy Policy</button>.</span>
+                  </label>
+                  <button type="button" onClick={handleSaveToAccount} disabled={!accountEmail || !acceptedLegal || isSendingAccountLink} className="w-full rounded-xl bg-orange-500 px-4 py-3 text-sm font-black text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50">
+                    {isSendingAccountLink ? 'Sending secure email…' : 'Create Account & Save Link'}
+                  </button>
+                  <p className="text-center text-[11px] text-slate-500">No marketing emails. No password required.</p>
+                </div>
+              )}
+            </div>
+
             <button
               type="button"
               onClick={() => setShowLinkPopup(false)}
@@ -228,12 +263,12 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
         <div className="text-center max-w-3xl mx-auto space-y-4">
           <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold uppercase tracking-wider">
             <Lock className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Seller Privacy & Address Protection</span>
+            <span>Built to Help Marketplace Sellers Close Faster</span>
           </div>
 
           <h1 className="text-3xl sm:text-4xl md:text-5xl font-black text-slate-900 tracking-tight">
-            Sell on Marketplace <br className="hidden sm:inline" />
-            <span className="text-blue-600">Without Giving Out Your Home Address</span>
+            Close Your Marketplace Sale Faster <br className="hidden sm:inline" />
+            <span className="text-blue-600">Offer Secure Local Delivery</span>
           </h1>
 
           <p className="text-slate-600 text-base sm:text-lg leading-relaxed">
@@ -273,7 +308,7 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
               <Sparkles className="w-6 h-6" />
             </div>
             <div>
-              <h3 className="font-bold text-slate-900 text-base">Eliminate Flakey Buyers</h3>
+              <h3 className="font-bold text-slate-900 text-base">Eliminate Flaky Buyers</h3>
               <p className="text-slate-500 text-xs mt-1 leading-normal">
                 Buyers pay delivery upfront and schedule exact arrival times. No endless "is this available?" or missed pickups at your door.
               </p>

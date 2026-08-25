@@ -47,7 +47,7 @@ export interface SellerDeliveryLink {
   askingPrice?: number;
   itemDescription?: string;
   itemPhotos: string[];
-  exactPickupAddress: string;
+  exactPickupAddress?: string;
   pickupZip: string;
   pickupCityState: string;
   pickupGateCode?: string;
@@ -56,9 +56,21 @@ export interface SellerDeliveryLink {
   payer: 'buyer_pays' | 'seller_pays' | 'split_50_50';
   isAddressMasked: boolean;
   maskedDisplayLocation: string;
-  status: 'Active' | 'Booked' | 'Expired';
+  status: 'Active' | 'Booked' | 'Paused' | 'Expired';
   createdAt: string;
   viewsCount: number;
+}
+
+export interface CreatedSellerDeliveryLink extends SellerDeliveryLink {
+  claimToken?: string;
+}
+
+export interface SellerAccount {
+  id: string;
+  email: string;
+  name: string;
+  phone: string;
+  links: SellerDeliveryLink[];
 }
 
 export interface BookingDetails {
@@ -149,6 +161,7 @@ export type ViewMode =
   | 'get-quote'
   | 'book-now'
   | 'for-sellers'
+  | 'seller-account'
   | 'customer-dashboard'
   | 'driver-dashboard'
   | 'admin-dashboard'

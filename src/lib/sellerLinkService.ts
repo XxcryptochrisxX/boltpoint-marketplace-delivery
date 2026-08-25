@@ -1,4 +1,4 @@
-import { SellerDeliveryLink, ItemCategory } from '../types';
+import { SellerDeliveryLink, CreatedSellerDeliveryLink, ItemCategory, SellerAccount } from '../types';
 import { KNOWN_COORDINATES } from './zipCoordinates';
 
 const SELLER_LINKS_KEY = 'md_seller_delivery_links_db';
@@ -205,7 +205,7 @@ export function generateShareableSellerUrl(link: SellerDeliveryLink): string {
 
 const sellerApi = (path = '') => `${import.meta.env.BASE_URL}api/seller-links${path}`;
 
-export async function createSellerDeliveryLinkRemote(data: Parameters<typeof createSellerDeliveryLink>[0]): Promise<SellerDeliveryLink> {
+export async function createSellerDeliveryLinkRemote(data: Parameters<typeof createSellerDeliveryLink>[0]): Promise<CreatedSellerDeliveryLink> {
   try {
     const response = await fetch(sellerApi(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
     const result = await response.json();
@@ -226,6 +226,39 @@ export async function getSellerDeliveryLinksRemote(): Promise<SellerDeliveryLink
     if (import.meta.env.DEV) return getSellerDeliveryLinks();
     throw error;
   }
+}
+
+const api = (path: string) => `${import.meta.env.BASE_URL}api${path}`;
+
+export async function requestSellerMagicLink(input: { email: string; claimToken?: string; termsAccepted?: boolean }) {
+  const response = await fetch(api('/seller-auth/request-link'), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...input, termsVersion: '2026-08-24', privacyVersion: '2026-08-24' }),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || 'Unable to send sign-in email.');
+  return result as { success: true; message: string };
+}
+
+export async function getSellerAccount(): Promise<SellerAccount | null> {
+  const response = await fetch(api('/seller/me'));
+  if (response.status === 401) return null;
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || 'Unable to load seller account.');
+  return result;
+}
+
+export async function updateOwnedSellerLink(id: string, status: 'Active' | 'Paused' | 'Expired') {
+  const response = await fetch(api(`/seller/links/${encodeURIComponent(id)}`), {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || 'Unable to update this link.');
+  return result as SellerDeliveryLink;
+}
+
+export async function logoutSeller() {
+  await fetch(api('/seller-auth/logout'), { method: 'POST' });
 }
 
 export async function getSellerDeliveryLinkByIdRemote(id: string): Promise<SellerDeliveryLink | null> {
