@@ -86,7 +86,12 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
         ...prev,
         pickupZip: sellerLink.pickupZip,
         itemType: sellerLink.itemType,
+        accurateMiles: undefined,
+        drivingDuration: undefined,
+        isOpenStreetMapVerified: false,
       }));
+      setRouteConfirmed(false);
+      setRouteError('');
       setPickupAddress(sellerLink.exactPickupAddress || sellerLink.maskedDisplayLocation);
       setPickupParts(parseFullAddress(sellerLink.exactPickupAddress || ''));
       setSellerName(sellerLink.sellerName);
@@ -128,6 +133,7 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [completedBooking, setCompletedBooking] = useState<BookingDetails | null>(null);
+  const [dispatchStatus, setDispatchStatus] = useState<'dispatched' | 'processing' | 'failed' | null>(null);
   const [buyerStep, setBuyerStep] = useState<1 | 2 | 3>(1);
 
   useEffect(() => {
@@ -142,7 +148,15 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
         const data = await response.json();
         if (!response.ok || !data.paid) throw new Error(data.error || 'Payment is still processing.');
         setCompletedBooking({ ...data.booking, id: data.orderNumber, status: 'Pending', createdAt: new Date().toISOString() });
-        onShowToast('Payment Confirmed', `Order ${data.orderNumber} is being processed for dispatch.`, 'success');
+        const status = data.dispatchStatus || 'processing';
+        setDispatchStatus(status);
+        if (status === 'failed') {
+          onShowToast('Payment Received — Dispatch Needs Attention', data.dispatchError || `Order ${data.orderNumber} will be entered into dispatch manually.`, 'info');
+        } else if (status === 'dispatched') {
+          onShowToast('Payment & Dispatch Confirmed', `Order ${data.orderNumber} was sent to Shipday.`, 'success');
+        } else {
+          onShowToast('Payment Confirmed', `Order ${data.orderNumber} is being sent to dispatch.`, 'success');
+        }
       })
       .catch((error) => onShowToast('Confirmation Pending', error.message, 'info'));
   }, []);
@@ -477,10 +491,37 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
                 </button>
                 {routeError && <p className="text-xs font-medium text-red-600">{routeError}</p>}
                 {!routeConfirmed && !routeError && <p className="text-xs text-slate-500">Price stays at $69 until the address and driving distance are confirmed.</p>}
+
+                <div className="space-y-3 rounded-2xl border border-amber-200 bg-amber-50/60 p-4">
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-wide text-slate-800">Additional services</p>
+                    <p className="mt-1 text-xs text-slate-600">Select every option that applies before confirming your delivery price.</p>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white p-3 text-xs hover:bg-slate-50">
+                      <input type="checkbox" checked={quoteInput.stairs > 0} onChange={(e) => setQuoteInput((prev) => ({ ...prev, stairs: e.target.checked ? 1 : 0 }))} className="rounded text-blue-600 focus:ring-blue-500" />
+                      <span className="font-semibold text-slate-800">Flight of Stairs (+ $15)</span>
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white p-3 text-xs hover:bg-slate-50">
+                      <input type="checkbox" checked={quoteInput.assemblyNeeded} onChange={(e) => setQuoteInput((prev) => ({ ...prev, assemblyNeeded: e.target.checked }))} className="rounded text-blue-600 focus:ring-blue-500" />
+                      <span className="font-semibold text-slate-800">Assembly (+ $35)</span>
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white p-3 text-xs hover:bg-slate-50">
+                      <input type="checkbox" checked={quoteInput.rushDelivery} onChange={(e) => setQuoteInput((prev) => ({ ...prev, rushDelivery: e.target.checked }))} className="rounded text-blue-600 focus:ring-blue-500" />
+                      <span className="font-semibold text-slate-800">Rush Delivery (+ $25)</span>
+                    </label>
+                  </div>
+                  {routeConfirmed && (
+                    <div className="flex items-center justify-between rounded-xl bg-blue-600 px-4 py-3 text-white">
+                      <span className="text-sm font-bold">Confirmed delivery price</span>
+                      <span className="text-xl font-black">{formatCurrency(quoteResult.totalPrice)}</span>
+                    </div>
+                  )}
+                </div>
                 {sellerLink && (
                   <div className="grid grid-cols-2 gap-3 pt-2">
                     <button type="button" onClick={() => setBuyerStep(1)} className="flex items-center justify-center gap-2 rounded-full border border-slate-300 bg-white px-4 py-3.5 text-sm font-black text-slate-700 hover:bg-slate-50"><ArrowLeft className="h-4 w-4" /> Back</button>
-                    <button type="button" onClick={continueBuyerAddress} className="flex items-center justify-center gap-2 rounded-full bg-blue-600 px-4 py-3.5 text-sm font-black text-white shadow-lg shadow-blue-500/20 hover:bg-blue-700">Next: Schedule <ArrowRight className="h-4 w-4" /></button>
+                    <button type="button" onClick={continueBuyerAddress} className="flex items-center justify-center gap-2 rounded-full bg-blue-600 px-4 py-3.5 text-sm font-black text-white shadow-lg shadow-blue-500/20 hover:bg-blue-700">Confirm Price & Schedule <ArrowRight className="h-4 w-4" /></button>
                   </div>
                 )}
               </div>}
@@ -560,39 +601,6 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
                       <option value="6:00 PM - 7:00 PM">6:00 PM - 7:00 PM</option>
                     </select>
                   </div>
-                </div>
-
-                {/* Additional services */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
-                  <label className="flex items-center gap-2 p-3 rounded-xl border border-slate-200 hover:bg-slate-50 cursor-pointer text-xs">
-                    <input
-                      type="checkbox"
-                      checked={quoteInput.stairs > 0}
-                      onChange={(e) => setQuoteInput((prev) => ({ ...prev, stairs: e.target.checked ? 1 : 0 }))}
-                      className="rounded text-blue-600 focus:ring-blue-500"
-                    />
-                    <span className="font-semibold text-slate-800">Flight of Stairs (+ $15)</span>
-                  </label>
-
-                  <label className="flex items-center gap-2 p-3 rounded-xl border border-slate-200 hover:bg-slate-50 cursor-pointer text-xs">
-                    <input
-                      type="checkbox"
-                      checked={quoteInput.assemblyNeeded}
-                      onChange={(e) => setQuoteInput((prev) => ({ ...prev, assemblyNeeded: e.target.checked }))}
-                      className="rounded text-blue-600 focus:ring-blue-500"
-                    />
-                    <span className="font-semibold text-slate-800">Assembly (+ $35)</span>
-                  </label>
-
-                  <label className="flex items-center gap-2 p-3 rounded-xl border border-slate-200 hover:bg-slate-50 cursor-pointer text-xs">
-                    <input
-                      type="checkbox"
-                      checked={quoteInput.rushDelivery}
-                      onChange={(e) => setQuoteInput((prev) => ({ ...prev, rushDelivery: e.target.checked }))}
-                      className="rounded text-blue-600 focus:ring-blue-500"
-                    />
-                    <span className="font-semibold text-slate-800">Rush Delivery (+ $25)</span>
-                  </label>
                 </div>
 
                 {/* Seller photos are view-only for buyers using a seller link. */}
@@ -810,7 +818,9 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
               </div>
 
               <p className="text-slate-600 text-xs leading-relaxed">
-                Your paid order is being processed for dispatch. A confirmation email will be sent to <strong>{completedBooking.customerEmail}</strong>; we will contact you when a driver is assigned.
+                {dispatchStatus === 'dispatched' && <>Your paid order was sent to Shipday successfully. A confirmation email will be sent to <strong>{completedBooking.customerEmail}</strong>; we will contact you when a driver is assigned.</>}
+                {dispatchStatus === 'failed' && <>Your payment was received, but automated dispatch needs attention. We will enter this order manually—please do not pay again. A confirmation email will be sent to <strong>{completedBooking.customerEmail}</strong>.</>}
+                {dispatchStatus !== 'dispatched' && dispatchStatus !== 'failed' && <>Your paid order is being sent to dispatch. A confirmation email will be sent to <strong>{completedBooking.customerEmail}</strong>; we will contact you when a driver is assigned.</>}
               </p>
 
               <div className="pt-2 flex flex-col gap-2">
