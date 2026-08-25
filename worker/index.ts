@@ -8,7 +8,7 @@ interface D1Statement {
   bind(...values: unknown[]): D1Statement;
   first<T = unknown>(): Promise<T | null>;
   all<T = unknown>(): Promise<D1Result<T>>;
-  run(): Promise<unknown>;
+  run(): Promise<{ meta?: { changes?: number } }>;
 }
 interface D1Database { prepare(query: string): D1Statement }
 interface R2Object { body: ReadableStream; httpEtag?: string; httpMetadata?: { contentType?: string } }
@@ -116,27 +116,69 @@ async function sendEmail(env: Env, to: string, subject: string, text: string, ke
 
 async function dispatchToShipday(env: Env, booking: CheckoutBooking, orderNumber: string, amount: number) {
   if (!env.SHIPDAY_API_KEY) throw new Error('SHIPDAY_API_KEY is not configured.');
+  const normalizePhone = (value?: string) => {
+    const digits = String(value || '').replace(/\D/g, '');
+    if (digits.length === 10) return `+1${digits}`;
+    if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+    return value?.startsWith('+') ? value : undefined;
+  };
+  const sellerPhone = normalizePhone(booking.sellerPhone || env.BUSINESS_PHONE);
+  const payload: Record<string, unknown> = {
+    orderNumber, customerName: booking.customerName, customerAddress: booking.deliveryAddress,
+    customerEmail: booking.customerEmail, customerPhoneNumber: normalizePhone(booking.customerPhone),
+    restaurantName: booking.sellerName, restaurantAddress: booking.pickupAddress,
+    expectedDeliveryDate: booking.preferredDeliveryDate,
+    orderItem: [{ name: booking.itemDescription || booking.quote.itemType, unitPrice: amount, quantity: 1 }],
+    deliveryFee: amount, totalOrderCost: amount, paymentMethod: 'credit_card',
+    pickupInstruction: booking.specialNotes || '',
+    deliveryInstruction: `Vehicle: ${booking.quoteResult.vehicleTypeRecommended}. Paid online. Arrival window: ${booking.preferredDeliveryTimeSlot}.`,
+    orderSource: 'Bolt Point Marketplace Delivery', additionalId: orderNumber,
+  };
+  if (!payload.customerPhoneNumber) throw new Error('Shipday requires a valid buyer phone number with country code.');
+  if (sellerPhone) payload.restaurantPhoneNumber = sellerPhone;
   const response = await fetch('https://api.shipday.com/orders', {
     method: 'POST',
     headers: { Authorization: `Basic ${env.SHIPDAY_API_KEY}`, Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      orderNumber, customerName: booking.customerName, customerAddress: booking.deliveryAddress,
-      customerEmail: booking.customerEmail, customerPhoneNumber: booking.customerPhone,
-      restaurantName: booking.sellerName, restaurantAddress: booking.pickupAddress,
-      restaurantPhoneNumber: booking.sellerPhone || env.BUSINESS_PHONE,
-      expectedDeliveryDate: booking.preferredDeliveryDate,
-      orderItem: [{ name: booking.itemDescription || booking.quote.itemType, unitPrice: amount, quantity: 1 }],
-      deliveryFee: amount, totalOrderCost: amount, paymentMethod: 'credit_card',
-      pickupInstruction: booking.specialNotes || '',
-      deliveryInstruction: `Vehicle: ${booking.quoteResult.vehicleTypeRecommended}. Paid online.`,
-      orderSource: 'Bolt Point Marketplace Delivery', additionalId: orderNumber,
-    }),
+    body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error(`Shipday failed (${response.status}).`);
-  return response.json() as Promise<{ orderId?: string }>;
+  const result = await response.json().catch(() => ({})) as { success?: boolean; orderId?: string | number; response?: string; message?: string };
+  if (!response.ok || result.success !== true || !result.orderId) {
+    throw new Error(`Shipday rejected the order${result.response || result.message ? `: ${result.response || result.message}` : ` (${response.status})`}.`);
+  }
+  return { ...result, orderId: String(result.orderId) };
 }
 
-interface GoogleAddress { lat: number; lng: number; displayName: string }
+async function fulfillPaidSession(env: Env, session: Stripe.Checkout.Session) {
+  const booking = fromMetadata(session.metadata || {});
+  const orderNumber = `BPL-${session.id.slice(-10).toUpperCase()}`;
+  const amount = (session.amount_total || 0) / 100;
+  const now = new Date().toISOString();
+  await env.DB.prepare(`INSERT OR IGNORE INTO dispatch_orders (session_id, order_number, status, created_at, updated_at)
+    VALUES (?1, ?2, 'pending', ?3, ?3)`).bind(session.id, orderNumber, now).run();
+  const existing = await env.DB.prepare('SELECT status, shipday_order_id, error FROM dispatch_orders WHERE session_id = ?1').bind(session.id).first<any>();
+  if (existing?.status === 'dispatched') return { orderNumber, booking, status: 'dispatched', shipdayOrderId: existing.shipday_order_id };
+  const stale = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const lock = await env.DB.prepare(`UPDATE dispatch_orders SET status = 'processing', error = NULL, updated_at = ?2
+    WHERE session_id = ?1 AND (status IN ('pending', 'failed') OR (status = 'processing' AND updated_at < ?3))`).bind(session.id, now, stale).run();
+  if (!lock.meta?.changes) return { orderNumber, booking, status: 'processing' };
+  try {
+    const shipday = await dispatchToShipday(env, booking, orderNumber, amount);
+    await env.DB.prepare(`UPDATE dispatch_orders SET status = 'dispatched', shipday_order_id = ?2, error = NULL, updated_at = ?3 WHERE session_id = ?1`)
+      .bind(session.id, shipday.orderId, new Date().toISOString()).run();
+    if (booking.sellerLinkId) await env.DB.prepare('UPDATE seller_links SET status = ?1 WHERE id = ?2').bind('Booked', booking.sellerLinkId).run();
+    const summary = `Delivery ${orderNumber} is paid and sent to dispatch.\nPickup: ${booking.pickupAddress}\nDelivery: ${booking.deliveryAddress}\nTotal: $${amount.toFixed(2)}`;
+    await Promise.allSettled([sendEmail(env, booking.customerEmail, `Delivery confirmed: ${orderNumber}`, summary, `${session.id}-customer`), env.BUSINESS_EMAIL ? sendEmail(env, env.BUSINESS_EMAIL, `New paid delivery: ${orderNumber}`, `${summary}\nShipday order: ${shipday.orderId}`, `${session.id}-business`) : Promise.resolve()]);
+    console.log(`Shipday dispatch created for ${orderNumber}: ${shipday.orderId}`);
+    return { orderNumber, booking, status: 'dispatched', shipdayOrderId: shipday.orderId };
+  } catch (error) {
+    const message = errorMessage(error).slice(0, 500);
+    await env.DB.prepare(`UPDATE dispatch_orders SET status = 'failed', error = ?2, updated_at = ?3 WHERE session_id = ?1`).bind(session.id, message, new Date().toISOString()).run();
+    console.error(`Shipday dispatch failed for ${orderNumber}: ${message}`);
+    throw error;
+  }
+}
+
+interface GoogleAddress { lat: number; lng: number; displayName: string; state: string; zip: string }
 async function validateGoogleAddress(env: Env, query: string): Promise<GoogleAddress> {
   if (!env.GOOGLE_MAPS_API_KEY) throw new Error('Google Maps is not configured.');
   const response = await fetch('https://addressvalidation.googleapis.com/v1:validateAddress', {
@@ -150,7 +192,15 @@ async function validateGoogleAddress(env: Env, query: string): Promise<GoogleAdd
   if (!verdict?.addressComplete || verdict?.hasUnconfirmedComponents || !['PREMISE', 'SUB_PREMISE'].includes(verdict?.geocodeGranularity) || typeof location?.latitude !== 'number') {
     throw new Error(`Google could not confirm this exact delivery address: ${query}.`);
   }
-  return { lat: location.latitude, lng: location.longitude, displayName: data.result.address.formattedAddress };
+  const components = data.result?.address?.addressComponents || [];
+  const component = (type: string) => components.find((item: any) => item.componentType === type)?.componentName;
+  const state = String(component('administrative_area_level_1')?.text || '').toUpperCase();
+  const zip = String(component('postal_code')?.text || '').slice(0, 5);
+  const requested = query.match(/,\s*([A-Za-z]{2})\s+(\d{5})(?:-\d{4})?\s*$/);
+  if (!requested || state !== requested[1].toUpperCase() || zip !== requested[2]) {
+    throw new Error('Google matched a different city, state, or ZIP than the address entered. Please select the full address from the suggestions and try again.');
+  }
+  return { lat: location.latitude, lng: location.longitude, displayName: data.result.address.formattedAddress, state, zip };
 }
 
 async function calculateRoadRoute(env: Env, origin: string, destination: string) {
@@ -167,6 +217,7 @@ async function calculateRoadRoute(env: Env, origin: string, destination: string)
   const h = Math.sin(latDistance / 2) ** 2 + Math.cos(radians(from.lat)) * Math.cos(radians(to.lat)) * Math.sin(lngDistance / 2) ** 2;
   const straightLineMiles = 3958.8 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
   if (miles > Math.max(5, straightLineMiles * 4)) throw new Error('Google returned an implausible detour. Please verify both addresses.');
+  if (miles > 150) throw new Error('This route is outside the local delivery area. No price was calculated. Please verify both full addresses or contact dispatch for a long-distance quote.');
   const durationMinutes = Math.max(Math.round(Number(String(data.routes[0].duration || '0s').replace('s', '')) / 60), 1);
   return { miles, durationMinutes, duration: `${durationMinutes} mins`, originFormatted: from.displayName, destinationFormatted: to.displayName };
 }
@@ -283,6 +334,14 @@ async function verifySellerLogin(request: Request, env: Env) {
     await env.DB.prepare('UPDATE seller_accounts SET email_verified_at = ?1, updated_at = ?1 WHERE id = ?2').bind(now, account.id).run();
   }
   if (login.claim_link_id) {
+    const source = await env.DB.prepare('SELECT data FROM seller_links WHERE id = ?1').bind(login.claim_link_id).first<any>();
+    const claimedLink = source ? JSON.parse(source.data) as SellerDeliveryLink : null;
+    if (claimedLink && (!account.name || !account.phone)) {
+      const name = account.name || claimedLink.sellerName || '';
+      const phone = account.phone || claimedLink.sellerPhone || '';
+      await env.DB.prepare('UPDATE seller_accounts SET name = ?1, phone = ?2, updated_at = ?3 WHERE id = ?4').bind(name, phone, now, account.id).run();
+      account = { ...account, name, phone };
+    }
     await env.DB.prepare('UPDATE seller_links SET owner_account_id = ?1, claim_token_hash = NULL, claim_expires_at = NULL WHERE id = ?2 AND owner_account_id IS NULL').bind(account.id, login.claim_link_id).run();
     await env.DB.prepare('INSERT INTO legal_acceptances (id, account_id, terms_version, privacy_version, accepted_at) VALUES (?1, ?2, ?3, ?4, ?5)')
       .bind(`LA-${randomToken(12)}`, account.id, login.terms_version, login.privacy_version, now).run();
@@ -328,7 +387,8 @@ async function sellerRoutes(request: Request, env: Env, path: string) {
     const stored = await env.DB.prepare('SELECT data, status FROM seller_links WHERE id = ?1').bind(routeMatch[1].toUpperCase()).first<any>();
     if (!stored || stored.status !== 'Active') return json({ error: 'This seller link is not active.' }, 404);
     const link = JSON.parse(stored.data) as SellerDeliveryLink;
-    return json({ success: true, ...(await calculateRoadRoute(env, link.exactPickupAddress!, destination)), source: 'google_routes' });
+    const route = await calculateRoadRoute(env, link.exactPickupAddress!, destination);
+    return json({ success: true, miles: route.miles, durationMinutes: route.durationMinutes, duration: route.duration, destinationFormatted: route.destinationFormatted, source: 'google_routes' });
   }
   const match = path.match(/^\/api\/seller-links\/(SL-\d{6})(\/view)?$/i);
   if (!match) return null;
@@ -405,7 +465,12 @@ async function api(request: Request, env: Env, path: string) {
   }
   if (request.method === 'GET' && path.startsWith('/api/checkout-session/')) {
     if (!stripe) return json({ error: 'Checkout is not configured.' }, 503);
-    try { const session = await stripe.checkout.sessions.retrieve(path.split('/').pop()!); return json({ paid: session.payment_status === 'paid', orderNumber: `BPL-${session.id.slice(-10).toUpperCase()}`, booking: fromMetadata(session.metadata || {}) }); }
+    try {
+      const session = await stripe.checkout.sessions.retrieve(path.split('/').pop()!);
+      if (session.payment_status !== 'paid') return json({ paid: false, orderNumber: `BPL-${session.id.slice(-10).toUpperCase()}`, booking: fromMetadata(session.metadata || {}) });
+      try { const result = await fulfillPaidSession(env, session); return json({ paid: true, dispatchStatus: result.status, shipdayOrderId: result.shipdayOrderId, orderNumber: result.orderNumber, booking: result.booking }); }
+      catch (error) { return json({ paid: true, dispatchStatus: 'failed', dispatchError: errorMessage(error), orderNumber: `BPL-${session.id.slice(-10).toUpperCase()}`, booking: fromMetadata(session.metadata || {}) }); }
+    }
     catch { return json({ error: 'Checkout session not found.' }, 404); }
   }
   if (request.method === 'POST' && path === '/api/stripe/webhook') {
@@ -415,11 +480,7 @@ async function api(request: Request, env: Env, path: string) {
       if (!signature) throw new Error('Missing Stripe signature.');
       const event = await stripe.webhooks.constructEventAsync(await request.text(), signature, env.STRIPE_WEBHOOK_SECRET);
       if (event.type === 'checkout.session.completed' && event.data.object.payment_status === 'paid') {
-        const session = event.data.object, booking = fromMetadata(session.metadata || {}), orderNumber = `BPL-${session.id.slice(-10).toUpperCase()}`, amount = (session.amount_total || 0) / 100;
-        const shipday = await dispatchToShipday(env, booking, orderNumber, amount);
-        if (booking.sellerLinkId) await env.DB.prepare('UPDATE seller_links SET status = ?1 WHERE id = ?2').bind('Booked', booking.sellerLinkId).run();
-        const summary = `Delivery ${orderNumber} is paid and sent to dispatch.\nPickup: ${booking.pickupAddress}\nDelivery: ${booking.deliveryAddress}\nTotal: $${amount.toFixed(2)}`;
-        await Promise.all([sendEmail(env, booking.customerEmail, `Delivery confirmed: ${orderNumber}`, summary, `${event.id}-customer`), env.BUSINESS_EMAIL ? sendEmail(env, env.BUSINESS_EMAIL, `New paid delivery: ${orderNumber}`, `${summary}\nShipday order: ${shipday.orderId || 'created'}`, `${event.id}-business`) : undefined]);
+        await fulfillPaidSession(env, event.data.object);
       }
       return json({ received: true });
     } catch (error) { return new Response(errorMessage(error), { status: 400 }); }
