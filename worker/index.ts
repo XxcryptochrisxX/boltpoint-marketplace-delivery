@@ -261,8 +261,8 @@ async function requestSellerLogin(request: Request, env: Env) {
     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`).bind(await hashToken(token), email, claimLinkId, claimLinkId ? TERMS_VERSION : null, claimLinkId ? PRIVACY_VERSION : null, new Date(Date.now() + 15 * 60 * 1000).toISOString(), now).run();
   if (!env.RESEND_API_KEY || !env.EMAIL_FROM) throw new Error('Seller sign-in email is not configured yet.');
   const action = claimLinkId ? 'save your delivery link and open your seller account' : 'sign in to your seller account';
-  await sendEmail(env, email, 'Your secure Bolt Point seller sign-in link', `Use this one-time link within 15 minutes to ${action}:\n\n${APP_URL}/api/seller-auth/verify?token=${token}\n\nIf you did not request this, you can ignore this email.`, `seller-login-${await hashToken(token)}`);
-  return json({ success: true, message: 'Check your email for a secure sign-in link.' });
+  await sendEmail(env, email, claimLinkId ? 'Confirm your Bolt Point seller account' : 'Your secure Bolt Point seller sign-in link', `Confirm your email to ${action}:\n\n${APP_URL}/api/seller-auth/verify?token=${token}\n\nThis secure link expires in 15 minutes. After you click it, we will automatically open your seller workspace with your saved listings.\n\nIf you did not request this, you can ignore this email.`, `seller-login-${await hashToken(token)}`);
+  return json({ success: true, message: `Confirmation email sent to ${email}. Open it within 15 minutes to continue.` });
 }
 
 async function verifySellerLogin(request: Request, env: Env) {
