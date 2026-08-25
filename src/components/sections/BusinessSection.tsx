@@ -39,7 +39,7 @@ export function BusinessSection({ onNavigate, onOpenPartnerModal }: BusinessSect
             Delivery Infrastructure for Your Business
           </h2>
           <p className="text-slate-300 text-base sm:text-lg">
-            Offer same-day oversized delivery without buying trucks, hiring drivers, or managing logistics.
+            Offer 1–2 day oversized delivery without buying trucks, hiring drivers, or managing logistics.
           </p>
         </div>
 
