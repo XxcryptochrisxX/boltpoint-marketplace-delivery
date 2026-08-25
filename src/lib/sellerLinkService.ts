@@ -248,9 +248,15 @@ export async function getSellerAccount(): Promise<SellerAccount | null> {
   return result;
 }
 
-export async function updateOwnedSellerLink(id: string, status: 'Active' | 'Paused' | 'Expired') {
+export type SellerLinkUpdate = Partial<Pick<SellerDeliveryLink,
+  'status' | 'itemTitle' | 'itemType' | 'askingPrice' | 'itemDescription' |
+  'sellerName' | 'sellerPhone' | 'sellerEmail' | 'pickupAvailability' |
+  'pickupInstructions' | 'pickupGateCode' | 'payer'
+>>;
+
+export async function updateOwnedSellerLink(id: string, updates: SellerLinkUpdate | SellerDeliveryLink['status']) {
   const response = await fetch(api(`/seller/links/${encodeURIComponent(id)}`), {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }),
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(typeof updates === 'string' ? { status: updates } : updates),
   });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || 'Unable to update this link.');
