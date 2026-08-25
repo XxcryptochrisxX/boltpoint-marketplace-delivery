@@ -215,7 +215,7 @@ export function QuoteCalculator({ onBookNow, title, subtitle }: QuoteCalculatorP
                 <div>
                   <span className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
                     <Zap className="w-4 h-4 text-amber-500 fill-amber-500" />
-                    <span>Rush Delivery (Express 90 Mins)</span>
+                    <span>Priority Delivery</span>
                   </span>
                   <span className="text-xs text-slate-500">Priority dispatch for immediate pickup window (+$40)</span>
                 </div>
@@ -282,12 +282,8 @@ export function QuoteCalculator({ onBookNow, title, subtitle }: QuoteCalculatorP
                   </strong>
                 </div>
                 <div className="flex justify-between items-center text-slate-300 text-xs sm:text-sm">
-                  <span>Estimated Driving Time:</span>
-                  <strong className="text-white font-semibold">{quoteResult.drivingDuration}</strong>
-                </div>
-                <div className="flex justify-between items-center text-slate-300 text-xs sm:text-sm">
-                  <span>Delivery Arrival Window:</span>
-                  <strong className="text-white font-semibold">{quoteResult.estimatedDeliveryTime}</strong>
+                  <span>Delivery Timing:</span>
+                  <strong className="text-white font-semibold">1–2 Day Delivery</strong>
                 </div>
               </div>
 
