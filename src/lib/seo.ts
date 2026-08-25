@@ -37,7 +37,7 @@ export function generateSchemaMarkup() {
       'Facebook Marketplace Furniture Delivery',
       'OfferUp Local Transport',
       'Estate Sale Item Pickup',
-      'Same-Day Oversized Logistics',
+      '1–2 Day Oversized Logistics',
     ],
     'offers': {
       '@type': 'AggregateOffer',
