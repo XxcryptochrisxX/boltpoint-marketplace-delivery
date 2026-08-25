@@ -248,7 +248,13 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
               <h3 className="font-black text-slate-900">Save and manage this link</h3>
               <p className="mt-1 text-xs leading-relaxed text-slate-600">Create your free seller account without re-entering your details. We’ll email you a secure sign-in link.</p>
               {accountEmailSent ? (
-                <div className="mt-3 rounded-xl bg-white p-3 text-sm font-bold text-emerald-700">Email sent. Open it within 15 minutes to finish saving this link.</div>
+                <div className="mt-4 rounded-2xl border border-emerald-200 bg-white p-4 text-center shadow-sm" role="status">
+                  <Check className="mx-auto h-9 w-9 rounded-full bg-emerald-100 p-2 text-emerald-700" />
+                  <p className="mt-2 font-black text-slate-900">Confirmation email sent</p>
+                  <p className="mt-1 text-xs leading-relaxed text-slate-600">We sent a secure confirmation link to <strong>{accountEmail}</strong>. Open it within 15 minutes to finish creating your account.</p>
+                  <p className="mt-2 text-xs font-bold text-emerald-700">After confirmation, this site will automatically open your seller page with this listing saved.</p>
+                  <p className="mt-3 text-[11px] text-slate-500">Don’t see it? Check your spam or promotions folder.</p>
+                </div>
               ) : (
                 <div className="mt-3 space-y-3">
                   <input type="email" required value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} placeholder="Your email address" className="w-full rounded-xl border border-orange-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-orange-500" />

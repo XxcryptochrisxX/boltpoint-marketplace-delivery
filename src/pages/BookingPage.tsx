@@ -20,6 +20,7 @@ import {
   Mail,
   FileText,
   ArrowRight,
+  ArrowLeft,
   X,
   Loader2,
   Compass,
@@ -127,6 +128,7 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [completedBooking, setCompletedBooking] = useState<BookingDetails | null>(null);
+  const [buyerStep, setBuyerStep] = useState<1 | 2 | 3>(1);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -215,6 +217,22 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
     setUploadedPhotos((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const continueBuyerContact = () => {
+    if (!customerName.trim() || !customerPhone.trim() || !customerEmail.trim()) {
+      onShowToast('Complete Your Contact Information', 'Enter your name, phone number, and email before continuing.', 'error');
+      return;
+    }
+    setBuyerStep(2);
+  };
+
+  const continueBuyerAddress = () => {
+    if (!routeConfirmed) {
+      onShowToast('Confirm Your Delivery Address', 'Select a complete delivery address and calculate the route before continuing.', 'error');
+      return;
+    }
+    setBuyerStep(3);
+  };
+
   const handleSubmitBooking = async (e: FormEvent) => {
     e.preventDefault();
     if (!customerName || !customerPhone || !customerEmail || !pickupAddress || !deliveryAddress) {
@@ -275,13 +293,13 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
         {/* Banner */}
         <div className="text-center max-w-2xl mx-auto space-y-2">
           <span className="text-xs font-bold uppercase tracking-widest text-blue-600 bg-blue-50 px-3 py-1 rounded-full border border-blue-100">
-            Step 2: Confirm Order & Schedule
+            {sellerLink ? 'Secure Seller Delivery Link' : 'Step 2: Confirm Order & Schedule'}
           </span>
           <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-900 tracking-tight">
-            Schedule Your Item Delivery
+            {sellerLink ? 'Book Delivery for This Item' : 'Schedule Your Item Delivery'}
           </h1>
           <p className="text-slate-600 text-sm">
-            Fill in delivery details so our insured delivery partner can pick up and deliver your item.
+            {sellerLink ? 'Three quick steps to confirm your address, choose a delivery time, and check out securely.' : 'Fill in delivery details so our insured delivery partner can pick up and deliver your item.'}
           </p>
         </div>
 
@@ -355,9 +373,25 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
           <div className="lg:col-span-7 bg-white rounded-3xl p-6 sm:p-8 border border-slate-200 shadow-xl space-y-8">
             
             <form onSubmit={handleSubmitBooking} className="space-y-8">
+              {sellerLink && (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3" aria-label={`Buyer booking step ${buyerStep} of 3`}>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { step: 1, label: 'Contact' },
+                      { step: 2, label: 'Address' },
+                      { step: 3, label: 'Schedule' },
+                    ].map((item) => (
+                      <div key={item.step} className={`rounded-xl px-2 py-2.5 text-center transition-colors ${buyerStep === item.step ? 'bg-blue-600 text-white shadow-md' : buyerStep > item.step ? 'bg-emerald-100 text-emerald-800' : 'bg-white text-slate-400'}`}>
+                        <span className="block text-[10px] font-extrabold uppercase tracking-wider">Step {item.step}</span>
+                        <span className="mt-0.5 block text-xs font-bold">{item.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               
               {/* Section 1: Customer Contact */}
-              <div className="space-y-4">
+              {(!sellerLink || buyerStep === 1) && <div className="space-y-4">
                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2">
                   1. Your Contact Information
                 </h3>
@@ -399,10 +433,15 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
                     className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none text-sm text-slate-900 font-medium"
                   />
                 </div>
-              </div>
+                {sellerLink && (
+                  <button type="button" onClick={continueBuyerContact} className="flex w-full items-center justify-center gap-2 rounded-full bg-blue-600 px-5 py-3.5 text-sm font-black text-white shadow-lg shadow-blue-500/20 transition-colors hover:bg-blue-700">
+                    Next: Delivery Address <ArrowRight className="h-4 w-4" />
+                  </button>
+                )}
+              </div>}
 
               {/* Section 2: Addresses */}
-              <div className="space-y-4">
+              {(!sellerLink || buyerStep === 2) && <div className="space-y-4">
                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2">
                   2. Pickup & Delivery Addresses
                 </h3>
@@ -438,7 +477,13 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
                 </button>
                 {routeError && <p className="text-xs font-medium text-red-600">{routeError}</p>}
                 {!routeConfirmed && !routeError && <p className="text-xs text-slate-500">Price stays at $69 until the address and driving distance are confirmed.</p>}
-              </div>
+                {sellerLink && (
+                  <div className="grid grid-cols-2 gap-3 pt-2">
+                    <button type="button" onClick={() => setBuyerStep(1)} className="flex items-center justify-center gap-2 rounded-full border border-slate-300 bg-white px-4 py-3.5 text-sm font-black text-slate-700 hover:bg-slate-50"><ArrowLeft className="h-4 w-4" /> Back</button>
+                    <button type="button" onClick={continueBuyerAddress} className="flex items-center justify-center gap-2 rounded-full bg-blue-600 px-4 py-3.5 text-sm font-black text-white shadow-lg shadow-blue-500/20 hover:bg-blue-700">Next: Schedule <ArrowRight className="h-4 w-4" /></button>
+                  </div>
+                )}
+              </div>}
 
               {/* Section 3: Seller Info (Hidden or Simplified if Seller Link Active) */}
               {!sellerLink && (
@@ -485,7 +530,7 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
               )}
 
               {/* Section 4: Time Window & Options */}
-              <div className="space-y-4">
+              {(!sellerLink || buyerStep === 3) && <div className="space-y-4">
                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2">
                   {sellerLink ? '3.' : '4.'} Delivery Schedule & Preferences
                 </h3>
@@ -601,10 +646,13 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
                   />
                 </div>
 
-              </div>
+              </div>}
 
               {/* Submit Button */}
-              <div className="pt-4 border-t border-slate-100 flex items-center justify-between gap-4">
+              {(!sellerLink || buyerStep === 3) && <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3">
+                {sellerLink && (
+                  <button type="button" onClick={() => setBuyerStep(2)} className="flex w-full sm:w-auto items-center justify-center gap-2 rounded-full border border-slate-300 bg-white px-5 py-4 text-sm font-black text-slate-700 hover:bg-slate-50"><ArrowLeft className="h-4 w-4" /> Back</button>
+                )}
                 <button
                   type="submit"
                   disabled={isSubmitting}
@@ -613,7 +661,7 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
                   <span>{isSubmitting ? 'Opening Secure Checkout...' : `Pay & Book Delivery (${formatCurrency(quoteResult.totalPrice)})`}</span>
                   <ArrowRight className="w-5 h-5" />
                 </button>
-              </div>
+              </div>}
 
             </form>
 
