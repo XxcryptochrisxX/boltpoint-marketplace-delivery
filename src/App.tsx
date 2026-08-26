@@ -41,8 +41,9 @@ export default function App() {
       } else if (params.get('view') === 'for-sellers') {
         setActiveView('for-sellers');
       }
-      if (params.get('seller_confirmation') === 'confirmed') showToast('Availability Confirmed', 'Thank you. The paid order has been released to dispatch.', 'success');
+      if (params.get('seller_confirmation') === 'availability-sent') showToast('Availability Sent', 'Thank you. The buyer can now select from your pickup windows.', 'success');
       if (params.get('seller_confirmation') === 'invalid') showToast('Confirmation Link Invalid', 'This availability link is invalid or has already been used.', 'error');
+      if (params.get('schedule') === 'received') showToast('Availability Received', 'Thank you. Dispatch will contact you and the seller to confirm the final time.', 'success');
     }
   }, []);
 
@@ -166,4 +167,5 @@ export default function App() {
     </div>
   );
 }
+
 
