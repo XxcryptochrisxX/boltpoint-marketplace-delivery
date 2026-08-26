@@ -864,16 +864,13 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
                 {dispatchStatus === 'awaiting_seller' && <>Payment was received. We emailed the seller to reconfirm that the item is available and unchanged. Dispatch remains paused until they confirm.</>}
                 {dispatchStatus === 'dispatched' && <>Your paid order was sent to Shipday successfully. A confirmation email will be sent to <strong>{completedBooking.customerEmail}</strong>; we will contact you when a driver is assigned.</>}
                 {dispatchStatus === 'failed' && <>Your payment was received, but automated dispatch needs attention. We will enter this order manually—please do not pay again. A confirmation email will be sent to <strong>{completedBooking.customerEmail}</strong>.</>}
-                {dispatchStatus !== 'dispatched' && dispatchStatus !== 'failed' && <>Your paid order is being sent to dispatch. A confirmation email will be sent to <strong>{completedBooking.customerEmail}</strong>; we will contact you when a driver is assigned.</>}
+                {dispatchStatus !== 'awaiting_seller' && dispatchStatus !== 'dispatched' && dispatchStatus !== 'failed' && <>Your paid order is being sent to dispatch. A confirmation email will be sent to <strong>{completedBooking.customerEmail}</strong>; we will contact you when a driver is assigned.</>}
               </p>
 
               <div className="pt-2 flex flex-col gap-2">
-                <button
-                  onClick={() => onNavigate('customer-dashboard')}
-                  className="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm shadow-sm transition-all"
-                >
-                  Track in Customer Portal
-                </button>
+                <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-center text-xs leading-relaxed text-blue-900">
+                  Save your tracking order ID above. This receipt is tied to your actual paid order; Boltpoint will email delivery updates as the seller confirms and dispatch is scheduled.
+                </div>
                 <button
                   onClick={() => setCompletedBooking(null)}
                   className="w-full py-2.5 rounded-xl bg-slate-100 text-slate-700 font-semibold text-xs hover:bg-slate-200"
