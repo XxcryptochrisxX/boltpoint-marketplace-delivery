@@ -130,10 +130,12 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
   const [preferredDeliveryTimeSlot, setPreferredDeliveryTimeSlot] = useState('2:00 PM - 3:00 PM');
   const [specialNotes, setSpecialNotes] = useState('');
   const [uploadedPhotos, setUploadedPhotos] = useState<string[]>(sellerLink?.itemPhotos || []);
+  const [buyerAcceptedListingCondition, setBuyerAcceptedListingCondition] = useState(false);
+  const [buyerAcceptedDeliveryTerms, setBuyerAcceptedDeliveryTerms] = useState(false);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [completedBooking, setCompletedBooking] = useState<BookingDetails | null>(null);
-  const [dispatchStatus, setDispatchStatus] = useState<'dispatched' | 'processing' | 'failed' | null>(null);
+  const [dispatchStatus, setDispatchStatus] = useState<'awaiting_seller' | 'dispatched' | 'processing' | 'failed' | null>(null);
   const [buyerStep, setBuyerStep] = useState<1 | 2 | 3>(1);
 
   useEffect(() => {
@@ -150,7 +152,9 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
         setCompletedBooking({ ...data.booking, id: data.orderNumber, status: 'Pending', createdAt: new Date().toISOString() });
         const status = data.dispatchStatus || 'processing';
         setDispatchStatus(status);
-        if (status === 'failed') {
+        if (status === 'awaiting_seller') {
+          onShowToast('Payment Received — Seller Confirmation Needed', 'We emailed the seller to reconfirm availability before dispatch.', 'info');
+        } else if (status === 'failed') {
           onShowToast('Payment Received — Dispatch Needs Attention', data.dispatchError || `Order ${data.orderNumber} will be entered into dispatch manually.`, 'info');
         } else if (status === 'dispatched') {
           onShowToast('Payment & Dispatch Confirmed', `Order ${data.orderNumber} was sent to Shipday.`, 'success');
@@ -261,6 +265,10 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
       onShowToast('Dispatch Assistance Required', 'Seller-paid and split-payment bookings require manual dispatch until account billing is enabled.', 'info');
       return;
     }
+    if (sellerLink && (!buyerAcceptedListingCondition || !buyerAcceptedDeliveryTerms)) {
+      onShowToast('Review Required', 'Confirm the item condition disclosure and delivery-service terms before checkout.', 'error');
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -282,6 +290,8 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
         preferredDeliveryTimeSlot,
         itemPhotos: uploadedPhotos,
         specialNotes: specialNotes + (sellerLink?.pickupInstructions ? ` | Seller Notes: ${sellerLink.pickupInstructions}` : ''),
+        buyerAcceptedListingCondition,
+        buyerAcceptedDeliveryTerms,
       };
       const response = await fetch(`${import.meta.env.BASE_URL}api/create-checkout-session`, {
         method: 'POST',
@@ -313,7 +323,7 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
             {sellerLink ? 'Book Delivery for This Item' : 'Schedule Your Item Delivery'}
           </h1>
           <p className="text-slate-600 text-sm">
-            {sellerLink ? 'Three quick steps to confirm your address, choose a delivery time, and check out securely.' : 'Fill in delivery details so our insured delivery partner can pick up and deliver your item.'}
+            {sellerLink ? 'Three quick steps to confirm your address, choose a delivery time, and check out securely.' : 'Fill in delivery details so an approved delivery partner can pick up and deliver your item.'}
           </p>
         </div>
 
@@ -362,6 +372,24 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
                   <span>The seller's exact house/unit address is routed directly to your assigned driver once pickup starts.</span>
                 </div>
               </div>
+            </div>
+
+            <div className="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 text-xs text-slate-700">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <strong className="text-sm text-slate-900">Seller condition disclosure</strong>
+                <span className="rounded-full bg-white px-2.5 py-1 font-bold text-amber-800 border border-amber-200">{sellerLink.conditionRating || 'Not rated'}</span>
+              </div>
+              <p className="mt-2"><strong>Dimensions:</strong> {sellerLink.dimensions || 'Not provided'}</p>
+              <p className="mt-1"><strong>Known defects:</strong> {sellerLink.knownDefects || 'None disclosed'}</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {sellerLink.hasStainsOrOdors && <span className="rounded-full bg-white px-2 py-1 border border-amber-200">Stains/odors</span>}
+                {sellerLink.hasPetExposure && <span className="rounded-full bg-white px-2 py-1 border border-amber-200">Pet exposure</span>}
+                {sellerLink.hasSmokeExposure && <span className="rounded-full bg-white px-2 py-1 border border-amber-200">Smoke exposure</span>}
+                {sellerLink.hasStructuralDamage && <span className="rounded-full bg-white px-2 py-1 border border-amber-200">Structural damage</span>}
+                {sellerLink.hasMissingPieces && <span className="rounded-full bg-white px-2 py-1 border border-amber-200">Missing pieces</span>}
+                {sellerLink.hasElectricalComponents && <span className="rounded-full bg-white px-2 py-1 border border-amber-200">Electrical/reclining parts</span>}
+              </div>
+              <p className="mt-2 text-[11px] text-slate-500">The seller certified this disclosure when the link was created. A snapshot is preserved when you check out.</p>
             </div>
 
             {sellerLink.payer === 'seller_pays' && (
@@ -654,6 +682,21 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
                   />
                 </div>
 
+                {sellerLink && (
+                  <div className="space-y-3 rounded-2xl border border-blue-200 bg-blue-50/60 p-4">
+                    <p className="text-xs font-black uppercase tracking-wide text-slate-800">Review before payment</p>
+                    <label className="flex items-start gap-2 text-xs leading-relaxed text-slate-700">
+                      <input type="checkbox" checked={buyerAcceptedListingCondition} onChange={(e) => setBuyerAcceptedListingCondition(e.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 accent-blue-600" />
+                      <span>I reviewed the seller’s photos, description, condition rating, and disclosed defects and want this item picked up.</span>
+                    </label>
+                    <label className="flex items-start gap-2 text-xs leading-relaxed text-slate-700">
+                      <input type="checkbox" checked={buyerAcceptedDeliveryTerms} onChange={(e) => setBuyerAcceptedDeliveryTerms(e.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 accent-blue-600" />
+                      <span>I understand BoltPoint is charging for delivery. The item sale is between me and the seller; pre-existing condition disputes are separate from documented damage caused during transport.</span>
+                    </label>
+                    <p className="text-[11px] text-slate-500">After payment, the seller must reconfirm availability. If the item is unavailable or materially different at pickup, delivery will pause for review.</p>
+                  </div>
+                )}
+
               </div>}
 
               {/* Submit Button */}
@@ -663,7 +706,7 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
                 )}
                 <button
                   type="submit"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || Boolean(sellerLink && (!buyerAcceptedListingCondition || !buyerAcceptedDeliveryTerms))}
                   className="w-full py-4 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-bold text-base shadow-lg shadow-blue-500/25 transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <span>{isSubmitting ? 'Opening Secure Checkout...' : `Pay & Book Delivery (${formatCurrency(quoteResult.totalPrice)})`}</span>
@@ -818,6 +861,7 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
               </div>
 
               <p className="text-slate-600 text-xs leading-relaxed">
+                {dispatchStatus === 'awaiting_seller' && <>Payment was received. We emailed the seller to reconfirm that the item is available and unchanged. Dispatch remains paused until they confirm.</>}
                 {dispatchStatus === 'dispatched' && <>Your paid order was sent to Shipday successfully. A confirmation email will be sent to <strong>{completedBooking.customerEmail}</strong>; we will contact you when a driver is assigned.</>}
                 {dispatchStatus === 'failed' && <>Your payment was received, but automated dispatch needs attention. We will enter this order manually—please do not pay again. A confirmation email will be sent to <strong>{completedBooking.customerEmail}</strong>.</>}
                 {dispatchStatus !== 'dispatched' && dispatchStatus !== 'failed' && <>Your paid order is being sent to dispatch. A confirmation email will be sent to <strong>{completedBooking.customerEmail}</strong>; we will contact you when a driver is assigned.</>}
