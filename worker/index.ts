@@ -112,14 +112,18 @@ function fromMetadata(metadata: Stripe.Metadata): CheckoutBooking {
   return JSON.parse(value);
 }
 
-async function sendEmail(env: Env, to: string, subject: string, text: string, key: string) {
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[character]!));
+}
+
+async function sendEmail(env: Env, to: string, subject: string, text: string, key: string, html?: string) {
   if (!env.RESEND_API_KEY || !env.EMAIL_FROM) return;
   let lastError = 'Unknown email provider error.';
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json', 'Idempotency-Key': key },
-      body: JSON.stringify({ from: env.EMAIL_FROM, to: [to], subject, text }),
+      body: JSON.stringify({ from: env.EMAIL_FROM, to: [to], subject, text, ...(html ? { html } : {}) }),
     });
     if (response.ok) return;
     const detail = await response.text().catch(() => '');
@@ -151,7 +155,7 @@ async function recordOrderEvent(
     .bind(sessionId, eventType, eventData, createdAt).run();
 }
 
-async function dispatchToShipday(env: Env, booking: CheckoutBooking, orderNumber: string, amount: number) {
+async function dispatchToShipday(env: Env, booking: CheckoutBooking, orderNumber: string, amount: number, deliveryWindow?: string) {
   if (!env.SHIPDAY_API_KEY) throw new Error('SHIPDAY_API_KEY is not configured.');
   const normalizePhone = (value?: string) => {
     const digits = String(value || '').replace(/\D/g, '');
@@ -164,11 +168,11 @@ async function dispatchToShipday(env: Env, booking: CheckoutBooking, orderNumber
     orderNumber, customerName: booking.customerName, customerAddress: booking.deliveryAddress,
     customerEmail: booking.customerEmail, customerPhoneNumber: normalizePhone(booking.customerPhone),
     restaurantName: booking.sellerName, restaurantAddress: booking.pickupAddress,
-    expectedDeliveryDate: booking.preferredDeliveryDate,
+    expectedDeliveryDate: deliveryWindow?.slice(0, 10) || booking.preferredDeliveryDate,
     orderItem: [{ name: booking.itemDescription || booking.quote.itemType, unitPrice: amount, quantity: 1 }],
     deliveryFee: amount, totalOrderCost: amount, paymentMethod: 'credit_card',
     pickupInstruction: booking.specialNotes || '',
-    deliveryInstruction: `Vehicle: ${booking.quoteResult.vehicleTypeRecommended}. Paid online. Arrival window: ${booking.preferredDeliveryTimeSlot}.`,
+    deliveryInstruction: `Vehicle: ${booking.quoteResult.vehicleTypeRecommended}. Paid online. Confirmed delivery window: ${deliveryWindow || 'Dispatch will confirm directly'}.`,
     orderSource: 'Bolt Point Marketplace Delivery', additionalId: orderNumber,
   };
   if (!payload.customerPhoneNumber) throw new Error('Shipday requires a valid buyer phone number with country code.');
@@ -190,14 +194,14 @@ async function fulfillPaidSession(env: Env, session: Stripe.Checkout.Session) {
   const orderNumber = `BPL-${session.id.slice(-10).toUpperCase()}`;
   const amount = (session.amount_total || 0) / 100;
   const now = new Date().toISOString();
-  await env.DB.prepare(`INSERT OR IGNORE INTO dispatch_orders (session_id, order_number, status, amount_cents, booking_snapshot, seller_confirmation_status, created_at, updated_at)
-    VALUES (?1, ?2, 'pending', ?3, ?4, ?5, ?6, ?6)`).bind(session.id, orderNumber, session.amount_total || 0, JSON.stringify(booking), booking.sellerLinkId ? 'pending' : 'not_required', now).run();
+  await env.DB.prepare(`INSERT OR IGNORE INTO dispatch_orders (session_id, order_number, status, amount_cents, booking_snapshot, seller_confirmation_status, scheduling_status, created_at, updated_at)
+    VALUES (?1, ?2, 'pending', ?3, ?4, ?5, ?6, ?7, ?7)`).bind(session.id, orderNumber, session.amount_total || 0, JSON.stringify(booking), booking.sellerLinkId ? 'pending' : 'not_required', booking.sellerLinkId ? 'awaiting_seller' : 'not_required', now).run();
   await recordOrderEvent(env, session.id, 'payment_confirmed', 'stripe', {
     amountCents: session.amount_total || 0,
     listingSnapshotAccepted: booking.buyerAcceptedListingCondition === true,
     deliveryTermsAccepted: booking.buyerAcceptedDeliveryTerms === true,
   }, now);
-  const existing = await env.DB.prepare('SELECT status, shipday_order_id, error, seller_confirmation_status, seller_confirmation_token_hash FROM dispatch_orders WHERE session_id = ?1').bind(session.id).first<any>();
+  const existing = await env.DB.prepare('SELECT status, shipday_order_id, error, seller_confirmation_status, seller_confirmation_token_hash, scheduling_status, selected_delivery_window FROM dispatch_orders WHERE session_id = ?1').bind(session.id).first<any>();
   if (existing?.status === 'dispatched') return { orderNumber, booking, status: 'dispatched', shipdayOrderId: existing.shipday_order_id };
   if (booking.sellerLinkId && existing?.seller_confirmation_status !== 'confirmed') {
     if (!existing?.seller_confirmation_token_hash) {
@@ -208,7 +212,8 @@ async function fulfillPaidSession(env: Env, session: Stripe.Checkout.Session) {
       if (saved.meta?.changes && booking.listingSnapshot?.sellerEmail) {
         const confirmUrl = `${APP_URL}/api/orders/${encodeURIComponent(orderNumber)}/seller-confirm?token=${confirmationToken}`;
         try {
-          await sendEmail(env, booking.listingSnapshot.sellerEmail, `Confirm item availability for ${orderNumber}`, `A buyer has paid to schedule delivery of ${booking.listingSnapshot.itemTitle}.\n\nConfirm that the item is still available and the disclosed condition is unchanged:\n${confirmUrl}\n\nDispatch will remain paused until you confirm. If the item is unavailable or its condition changed, contact BoltPoint instead of confirming.`, `${session.id}-seller-availability`);
+          const item = booking.listingSnapshot.itemTitle;
+          await sendEmail(env, booking.listingSnapshot.sellerEmail, `Let’s confirm pickup availability for ${item}`, `A buyer has paid for delivery of ${item}. Confirm the item and give us a few pickup windows here:\n${confirmUrl}\n\nThe buyer will choose from your available windows, then BoltPoint dispatch will confirm the final pickup and delivery time.`, `${session.id}-seller-availability`, `<h2>Let’s confirm pickup availability for <strong>${escapeHtml(item)}</strong></h2><p>A buyer has paid for delivery. Confirm the item is still available and give us a few pickup windows.</p><p><a style="display:inline-block;padding:14px 20px;border-radius:12px;background:#f97316;color:#fff;text-decoration:none;font-weight:700" href="${confirmUrl}">Confirm Item &amp; Pickup Availability</a></p><p>The buyer will choose from your available windows, then BoltPoint dispatch will confirm the final pickup and delivery time.</p>`);
         } catch (error) {
           await env.DB.prepare('UPDATE dispatch_orders SET seller_confirmation_token_hash = NULL, error = ?2, updated_at = ?3 WHERE session_id = ?1').bind(session.id, errorMessage(error).slice(0, 500), new Date().toISOString()).run();
           throw error;
@@ -217,12 +222,15 @@ async function fulfillPaidSession(env: Env, session: Stripe.Checkout.Session) {
     }
     return { orderNumber, booking, status: 'awaiting_seller' };
   }
+  if (booking.sellerLinkId && existing?.scheduling_status !== 'confirmed') {
+    return { orderNumber, booking, status: existing?.scheduling_status || 'awaiting_seller' };
+  }
   const stale = new Date(Date.now() - 5 * 60 * 1000).toISOString();
   const lock = await env.DB.prepare(`UPDATE dispatch_orders SET status = 'processing', error = NULL, updated_at = ?2
     WHERE session_id = ?1 AND (status IN ('pending', 'failed') OR (status = 'processing' AND updated_at < ?3))`).bind(session.id, now, stale).run();
   if (!lock.meta?.changes) return { orderNumber, booking, status: 'processing' };
   try {
-    const shipday = await dispatchToShipday(env, booking, orderNumber, amount);
+    const shipday = await dispatchToShipday(env, booking, orderNumber, amount, existing?.selected_delivery_window);
     const pickupPin = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1000000).padStart(6, '0');
     await env.DB.prepare(`UPDATE dispatch_orders SET status = 'dispatched', shipday_order_id = ?2, error = NULL, updated_at = ?3 WHERE session_id = ?1`)
       .bind(session.id, shipday.orderId, new Date().toISOString()).run();
@@ -518,31 +526,70 @@ async function api(request: Request, env: Env, path: string) {
     const row = await env.DB.prepare('SELECT session_id FROM dispatch_orders WHERE order_number = ?1 AND seller_confirmation_token_hash = ?2').bind(sellerConfirmationMatch[1], await hashToken(token)).first<any>();
     if (!row) return Response.redirect(`${APP_URL}/?seller_confirmation=invalid`, 302);
     const action = `${PREFIX}/api/orders/${encodeURIComponent(sellerConfirmationMatch[1])}/seller-confirm`;
-    return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Confirm item availability</title><style>body{margin:0;background:#f8fafc;color:#0f172a;font-family:system-ui,sans-serif}.card{max-width:520px;margin:8vh auto;padding:28px;border:1px solid #dbeafe;border-radius:24px;background:white;box-shadow:0 18px 45px #0f172a18}h1{margin:0 0 12px;font-size:26px}p{line-height:1.55;color:#475569}.order{margin:18px 0;padding:12px;border-radius:12px;background:#eff6ff;color:#1d4ed8;font-weight:800}button{width:100%;border:0;border-radius:14px;padding:15px;background:#f97316;color:white;font-size:16px;font-weight:800;cursor:pointer}</style></head><body><main class="card"><h1>Confirm item availability</h1><p>A buyer has paid for delivery. Confirm only if the item is still available and its condition matches your listing. Dispatch remains paused until you press the button below.</p><div class="order">Order ${sellerConfirmationMatch[1]}</div><form method="post" action="${action}"><input type="hidden" name="token" value="${token}"><button type="submit">Confirm item and release to dispatch</button></form></main></body></html>`, {
+    return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Confirm pickup availability</title><style>body{margin:0;background:#f8fafc;color:#0f172a;font-family:system-ui,sans-serif}.card{max-width:560px;margin:5vh auto;padding:28px;border:1px solid #dbeafe;border-radius:24px;background:white;box-shadow:0 18px 45px #0f172a18}h1{margin:0 0 12px;font-size:26px}p{line-height:1.55;color:#475569}.order{margin:18px 0;padding:12px;border-radius:12px;background:#eff6ff;color:#1d4ed8;font-weight:800}label{display:block;margin:14px 0 6px;font-weight:700}input{box-sizing:border-box;width:100%;padding:13px;border:1px solid #cbd5e1;border-radius:12px;font:inherit}button{width:100%;margin-top:20px;border:0;border-radius:14px;padding:15px;background:#f97316;color:white;font-size:16px;font-weight:800;cursor:pointer}</style></head><body><main class="card"><h1>Let’s confirm pickup availability</h1><p>Confirm the item is still available and unchanged, then offer at least two pickup windows. The buyer will choose from these options; BoltPoint will confirm the final time before dispatch.</p><div class="order">Order ${sellerConfirmationMatch[1]}</div><form method="post" action="${action}"><input type="hidden" name="token" value="${token}"><label>Pickup option 1</label><input required type="datetime-local" name="window"><label>Pickup option 2</label><input required type="datetime-local" name="window"><label>Pickup option 3 (optional)</label><input type="datetime-local" name="window"><button type="submit">Confirm Item &amp; Send Availability</button></form></main></body></html>`, {
       headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" },
     });
   }
   if (request.method === 'POST' && sellerConfirmationMatch) {
     const form = await request.formData();
     const token = String(form.get('token') || '');
-    const row = await env.DB.prepare('SELECT session_id FROM dispatch_orders WHERE order_number = ?1 AND seller_confirmation_token_hash = ?2').bind(sellerConfirmationMatch[1], await hashToken(token)).first<any>();
+    const row = await env.DB.prepare('SELECT session_id, booking_snapshot FROM dispatch_orders WHERE order_number = ?1 AND seller_confirmation_token_hash = ?2').bind(sellerConfirmationMatch[1], await hashToken(token)).first<any>();
     if (!row) return Response.redirect(`${APP_URL}/?seller_confirmation=invalid`, 302);
+    const windows = form.getAll('window').map(String).filter(Boolean).filter((value) => !Number.isNaN(Date.parse(value)) && Date.parse(value) > Date.now()).slice(0, 3);
+    if (windows.length < 2) return new Response('Please provide at least two future pickup windows.', { status: 400 });
     const now = new Date().toISOString();
-    await env.DB.prepare(`UPDATE dispatch_orders SET seller_confirmation_status = 'confirmed', seller_confirmed_at = ?2, seller_confirmation_token_hash = NULL, updated_at = ?2 WHERE session_id = ?1`).bind(row.session_id, now).run();
-    await recordOrderEvent(env, row.session_id, 'seller_availability_confirmed', 'seller', {}, now);
-    const stripe = stripeClient(env);
-    if (!stripe) return json({ error: 'Checkout is not configured.' }, 503);
-    const session = await stripe.checkout.sessions.retrieve(row.session_id);
-    await fulfillPaidSession(env, session);
-    return Response.redirect(`${APP_URL}/?seller_confirmation=confirmed`, 302);
+    const buyerToken = randomToken();
+    await env.DB.prepare(`UPDATE dispatch_orders SET seller_confirmation_status = 'confirmed', seller_confirmed_at = ?2, seller_confirmation_token_hash = NULL, seller_availability_windows = ?3, buyer_selection_token_hash = ?4, scheduling_status = 'awaiting_buyer', status = 'awaiting_schedule', updated_at = ?2 WHERE session_id = ?1`).bind(row.session_id, now, JSON.stringify(windows), await hashToken(buyerToken)).run();
+    await recordOrderEvent(env, row.session_id, 'seller_availability_submitted', 'seller', { windows }, now);
+    const booking = JSON.parse(row.booking_snapshot) as CheckoutBooking;
+    const buyerUrl = `${APP_URL}/api/orders/${encodeURIComponent(sellerConfirmationMatch[1])}/buyer-schedule?token=${buyerToken}`;
+    await sendEmail(env, booking.customerEmail, `Choose your delivery window for ${sellerConfirmationMatch[1]}`, `The seller confirmed the item and pickup availability. Choose a window here:\n${buyerUrl}\n\nBoltPoint dispatch will contact both parties to confirm the final pickup and delivery timing.`, `${row.session_id}-buyer-schedule`, `<h2>The seller is ready</h2><p>Choose one of the seller’s available pickup windows. BoltPoint dispatch will then contact both parties to confirm the final timing.</p><p><a style="display:inline-block;padding:14px 20px;border-radius:12px;background:#2563eb;color:#fff;text-decoration:none;font-weight:700" href="${buyerUrl}">Choose My Delivery Window</a></p>`);
+    return Response.redirect(`${APP_URL}/?seller_confirmation=availability-sent`, 302);
+  }
+  const buyerScheduleMatch = path.match(/^\/api\/orders\/(BPL-[A-Z0-9]+)\/buyer-schedule$/);
+  if (buyerScheduleMatch && request.method === 'GET') {
+    const token = new URL(request.url).searchParams.get('token') || '';
+    const row = await env.DB.prepare('SELECT seller_availability_windows FROM dispatch_orders WHERE order_number = ?1 AND buyer_selection_token_hash = ?2 AND scheduling_status = ?3').bind(buyerScheduleMatch[1], await hashToken(token), 'awaiting_buyer').first<any>();
+    if (!row) return new Response('This scheduling link is invalid or has already been used.', { status: 410 });
+    const windows = JSON.parse(row.seller_availability_windows || '[]') as string[];
+    const choices = windows.map((window, index) => `<label><input required type="radio" name="window" value="${escapeHtml(window)}"> <span>${escapeHtml(new Date(window).toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' }))}</span></label>`).join('');
+    const action = `${PREFIX}/api/orders/${encodeURIComponent(buyerScheduleMatch[1])}/buyer-schedule`;
+    return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Choose delivery window</title><style>body{margin:0;background:#f8fafc;color:#0f172a;font-family:system-ui,sans-serif}.card{max-width:560px;margin:6vh auto;padding:28px;border-radius:24px;background:white;box-shadow:0 18px 45px #0f172a18}label{display:flex;gap:10px;margin:12px 0;padding:15px;border:1px solid #cbd5e1;border-radius:12px}button{width:100%;margin-top:18px;border:0;border-radius:14px;padding:15px;background:#2563eb;color:white;font-size:16px;font-weight:800}</style></head><body><main class="card"><h1>Choose your delivery window</h1><p>Select a window that works for you. Dispatch will contact both you and the seller to confirm the exact pickup and arrival timing.</p><form method="post" action="${action}"><input type="hidden" name="token" value="${token}">${choices}<button>Send My Selection</button></form></main></body></html>`, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" } });
+  }
+  if (buyerScheduleMatch && request.method === 'POST') {
+    const form = await request.formData();
+    const token = String(form.get('token') || '');
+    const selected = String(form.get('window') || '');
+    const row = await env.DB.prepare('SELECT session_id, seller_availability_windows FROM dispatch_orders WHERE order_number = ?1 AND buyer_selection_token_hash = ?2 AND scheduling_status = ?3').bind(buyerScheduleMatch[1], await hashToken(token), 'awaiting_buyer').first<any>();
+    const available = row ? JSON.parse(row.seller_availability_windows || '[]') as string[] : [];
+    if (!row || !available.includes(selected)) return new Response('This scheduling selection is invalid or has already been used.', { status: 410 });
+    const now = new Date().toISOString();
+    await env.DB.prepare(`UPDATE dispatch_orders SET selected_delivery_window = ?2, buyer_selection_token_hash = NULL, scheduling_status = 'ready_to_schedule', status = 'ready_to_schedule', updated_at = ?3 WHERE session_id = ?1`).bind(row.session_id, selected, now).run();
+    await recordOrderEvent(env, row.session_id, 'buyer_window_selected', 'buyer', { selectedWindow: selected }, now);
+    if (env.BUSINESS_EMAIL) await sendEmail(env, env.BUSINESS_EMAIL, `Ready to schedule: ${buyerScheduleMatch[1]}`, `Buyer and seller availability now align for ${new Date(selected).toLocaleString('en-US')}. Open the protected admin dashboard to verify and release the order to Shipday.`, `${row.session_id}-ready-to-schedule`);
+    return Response.redirect(`${APP_URL}/?schedule=received`, 302);
   }
   if (path === '/api/admin/overview' && request.method === 'GET') {
     const email = adminEmail(request, env);
     if (!email) return json({ error: 'Administrator access required.' }, 403);
-    const orders = await env.DB.prepare(`SELECT session_id, order_number, status, amount_cents, seller_confirmation_status, seller_confirmed_at, pickup_status, pickup_report, delivery_report, shipday_order_id, error, created_at, updated_at FROM dispatch_orders ORDER BY created_at DESC LIMIT 250`).all<any>();
+    const orders = await env.DB.prepare(`SELECT session_id, order_number, status, amount_cents, seller_confirmation_status, scheduling_status, selected_delivery_window, seller_confirmed_at, pickup_status, pickup_report, delivery_report, shipday_order_id, error, created_at, updated_at FROM dispatch_orders ORDER BY created_at DESC LIMIT 250`).all<any>();
     const accounts = await env.DB.prepare('SELECT COUNT(*) AS total FROM seller_accounts').first<any>();
     const links = await env.DB.prepare(`SELECT status, COUNT(*) AS total FROM seller_links GROUP BY status`).all<any>();
     return json({ admin: email, sellerAccounts: Number(accounts?.total || 0), listingCounts: links.results || [], orders: orders.results || [] });
+  }
+  const scheduleMatch = path.match(/^\/api\/admin\/orders\/(BPL-[A-Z0-9]+)\/confirm-schedule$/);
+  if (scheduleMatch && request.method === 'POST') {
+    const email = adminEmail(request, env);
+    if (!email) return json({ error: 'Administrator access required.' }, 403);
+    const row = await env.DB.prepare(`SELECT session_id FROM dispatch_orders WHERE order_number = ?1 AND scheduling_status = 'ready_to_schedule'`).bind(scheduleMatch[1]).first<any>();
+    if (!row) return json({ error: 'This order is not ready to schedule.' }, 409);
+    const now = new Date().toISOString();
+    await env.DB.prepare(`UPDATE dispatch_orders SET scheduling_status = 'confirmed', schedule_confirmed_at = ?2, status = 'pending', updated_at = ?2 WHERE session_id = ?1`).bind(row.session_id, now).run();
+    await recordOrderEvent(env, row.session_id, 'schedule_confirmed', email, {}, now);
+    const stripe = stripeClient(env);
+    if (!stripe) return json({ error: 'Checkout is not configured.' }, 503);
+    const result = await fulfillPaidSession(env, await stripe.checkout.sessions.retrieve(row.session_id));
+    return json({ success: true, dispatchStatus: result.status, shipdayOrderId: result.shipdayOrderId });
   }
   const pickupMatch = path.match(/^\/api\/admin\/orders\/(BPL-[A-Z0-9]+)\/pickup-report$/);
   if (pickupMatch && request.method === 'POST') {
@@ -661,3 +708,4 @@ export default {
     return new Response(assetResponse.body, { status: assetResponse.status, statusText: assetResponse.statusText, headers });
   },
 };
+
