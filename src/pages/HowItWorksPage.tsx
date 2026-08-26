@@ -48,14 +48,14 @@ export function HowItWorksPage({ onNavigate }: HowItWorksPageProps) {
 
             <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
               <Shield className="w-8 h-8 text-blue-600" />
-              <h3 className="font-bold text-slate-900">2. $50k Cargo Insurance</h3>
-              <p className="text-xs text-slate-600">Full insurance protection against transit accidental damage or loss.</p>
+              <h3 className="font-bold text-slate-900">2. Documented Claims Support</h3>
+              <p className="text-xs text-slate-600">Pickup and delivery evidence supports eligible claims under the assigned carrier’s policy and booking terms.</p>
             </div>
 
             <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
               <UserCheck className="w-8 h-8 text-blue-600" />
               <h3 className="font-bold text-slate-900">3. Vetted Independent Drivers</h3>
-              <p className="text-xs text-slate-600">Background-checked, licensed, and vehicle-verified local delivery partners.</p>
+              <p className="text-xs text-slate-600">Approved local delivery partners with required identity, vehicle, and business documentation.</p>
             </div>
 
             <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
