@@ -575,7 +575,26 @@ async function api(request: Request, env: Env, path: string) {
     const orders = await env.DB.prepare(`SELECT session_id, order_number, status, amount_cents, seller_confirmation_status, scheduling_status, selected_delivery_window, seller_confirmed_at, pickup_status, pickup_report, delivery_report, shipday_order_id, error, created_at, updated_at FROM dispatch_orders ORDER BY created_at DESC LIMIT 250`).all<any>();
     const accounts = await env.DB.prepare('SELECT COUNT(*) AS total FROM seller_accounts').first<any>();
     const links = await env.DB.prepare(`SELECT status, COUNT(*) AS total FROM seller_links GROUP BY status`).all<any>();
-    return json({ admin: email, sellerAccounts: Number(accounts?.total || 0), listingCounts: links.results || [], orders: orders.results || [] });
+    return json({
+      admin: email,
+      sellerAccounts: Number(accounts?.total || 0),
+      listingCounts: links.results || [],
+      orders: orders.results || [],
+      services: {
+        cloudflare: true,
+        googleMaps: Boolean(env.GOOGLE_MAPS_API_KEY),
+        stripe: Boolean(env.STRIPE_SECRET_KEY),
+        shipday: Boolean(env.SHIPDAY_API_KEY),
+        resend: Boolean(env.RESEND_API_KEY),
+        r2Storage: true,
+        d1Database: true,
+      },
+    });
+  }
+  if (path === '/api/admin/login' && request.method === 'GET') {
+    const email = adminEmail(request, env);
+    if (!email) return json({ error: 'Administrator access required.' }, 403);
+    return Response.redirect(`${APP_URL}/?view=admin-dashboard`, 302);
   }
   const scheduleMatch = path.match(/^\/api\/admin\/orders\/(BPL-[A-Z0-9]+)\/confirm-schedule$/);
   if (scheduleMatch && request.method === 'POST') {
