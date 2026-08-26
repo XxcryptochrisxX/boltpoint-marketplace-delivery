@@ -15,7 +15,7 @@ interface NotificationToastProps {
 
 export function NotificationToast({ toasts, onDismiss }: NotificationToastProps) {
   return (
-    <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-3 max-w-md w-full px-4 pointer-events-none">
+    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[120] flex w-full flex-col gap-3 px-4 sm:inset-x-auto sm:bottom-5 sm:right-5 sm:max-w-md sm:px-0">
       <AnimatePresence>
         {toasts.map((toast) => (
           <motion.div
