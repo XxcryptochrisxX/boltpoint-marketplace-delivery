@@ -615,6 +615,16 @@ export default {
     const path = url.pathname.slice(PREFIX.length) || '/';
     if (path.startsWith('/api/')) return api(request, env, path);
     const assetUrl = new URL(request.url); assetUrl.pathname = path;
-    return env.ASSETS.fetch(new Request(assetUrl, request));
+    const assetResponse = await env.ASSETS.fetch(new Request(assetUrl, request));
+    const headers = new Headers(assetResponse.headers);
+    const contentType = headers.get('content-type') || '';
+    if (contentType.includes('text/html')) {
+      headers.set('cache-control', 'no-cache, no-store, must-revalidate');
+      headers.set('pragma', 'no-cache');
+      headers.set('expires', '0');
+    } else if (path.startsWith('/assets/')) {
+      headers.set('cache-control', 'public, max-age=31536000, immutable');
+    }
+    return new Response(assetResponse.body, { status: assetResponse.status, statusText: assetResponse.statusText, headers });
   },
 };
