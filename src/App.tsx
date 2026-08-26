@@ -14,7 +14,6 @@ import { FAQPage } from './pages/FAQPage';
 import { ContactPage } from './pages/ContactPage';
 import { QuotePage } from './pages/QuotePage';
 import { BookingPage } from './pages/BookingPage';
-import { CustomerDashboardPage } from './pages/CustomerDashboardPage';
 import { DriverDashboardPage } from './pages/DriverDashboardPage';
 import { AdminDashboardPage } from './pages/AdminDashboardPage';
 import { SellerLinkGeneratorPage } from './pages/SellerLinkGeneratorPage';
@@ -143,10 +142,6 @@ export default function App() {
             onNavigate={setActiveView}
             onShowToast={showToast}
           />
-        )}
-
-        {activeView === 'customer-dashboard' && (
-          <CustomerDashboardPage onNavigate={setActiveView} onShowToast={showToast} />
         )}
 
         {activeView === 'driver-dashboard' && (
