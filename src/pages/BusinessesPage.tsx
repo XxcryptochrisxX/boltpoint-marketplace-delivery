@@ -106,7 +106,7 @@ export function BusinessesPage({ onNavigate, onShowToast }: BusinessesPageProps)
 
             <div className="p-6 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
               <h3 className="font-bold text-slate-900 text-base">White-Glove Placement</h3>
-              <p className="text-xs text-slate-600">Uniformed, background-checked delivery partners offering room-of-choice setup.</p>
+              <p className="text-xs text-slate-600">Approved local delivery partners with documented dispatch and proof of delivery.</p>
             </div>
           </div>
         </div>
