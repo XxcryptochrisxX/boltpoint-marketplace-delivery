@@ -107,7 +107,7 @@ export function Footer({ onNavigate }: FooterProps) {
               </p>
               <p className="flex items-start gap-2">
                 <MapPin className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
-                <span>Austin, TX (National Expansion in progress)</span>
+                <span>Tampa Bay, FL</span>
               </p>
             </div>
 
