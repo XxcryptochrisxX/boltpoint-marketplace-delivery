@@ -155,6 +155,14 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
     setWizardStep(2);
   };
 
+  const itemStepChecks = [
+    { label: 'Listing title', complete: Boolean(itemTitle.trim()) },
+    { label: 'Dimensions', complete: Boolean(dimensions.trim()) },
+    { label: '4 current photos', complete: itemPhotos.length >= 4 },
+    { label: 'Condition certification', complete: conditionCertified },
+  ];
+  const itemStepComplete = itemStepChecks.every((check) => check.complete);
+
   const continueFromPickup = () => {
     if (!isCompleteAddressParts(pickupAddressParts)) {
       onShowToast('Complete Pickup Address', 'Select or enter a complete street address, city, state, and ZIP code.', 'error');
@@ -556,9 +564,23 @@ export function SellerLinkGeneratorPage({ onNavigate, onShowToast, onOpenSellerL
                       <p className="mt-1 text-[11px] text-slate-500">We will ask you to reconfirm that the item is available before dispatch.</p>
                     </div>
                   </div>
-                  <button type="button" onClick={continueFromItem} className="flex w-full items-center justify-center gap-2 rounded-full bg-blue-600 px-5 py-3.5 text-sm font-black text-white shadow-lg shadow-blue-500/20 hover:bg-blue-700">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3" aria-live="polite">
+                    <p className="mb-2 text-xs font-bold text-slate-700">Before continuing:</p>
+                    <div className="grid grid-cols-1 gap-1.5 min-[420px]:grid-cols-2">
+                      {itemStepChecks.map((check) => (
+                        <div key={check.label} className={`flex items-center gap-1.5 text-xs font-semibold ${check.complete ? 'text-emerald-700' : 'text-slate-500'}`}>
+                          {check.complete ? <Check className="h-3.5 w-3.5" /> : <AlertCircle className="h-3.5 w-3.5" />}
+                          <span>{check.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <button type="button" onClick={continueFromItem} aria-describedby="item-step-help" className="flex w-full items-center justify-center gap-2 rounded-full bg-blue-600 px-5 py-3.5 text-sm font-black text-white shadow-lg shadow-blue-500/20 hover:bg-blue-700 active:bg-blue-800">
                     Next: Private Pickup <ArrowRight className="h-4 w-4" />
                   </button>
+                  <p id="item-step-help" className={`text-center text-xs ${itemStepComplete ? 'font-semibold text-emerald-700' : 'text-slate-500'}`}>
+                    {itemStepComplete ? 'Item details complete — tap Next to continue.' : 'Tap Next at any time to see what still needs attention.'}
+                  </p>
                 </div>
 
                 {/* Section 2: Confidential Pickup Details */}
