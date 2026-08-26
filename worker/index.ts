@@ -30,6 +30,7 @@ interface Env {
   EMAIL_FROM?: string;
   BUSINESS_EMAIL?: string;
   BUSINESS_PHONE?: string;
+  ADMIN_EMAILS?: string;
 }
 
 type CheckoutBooking = Omit<BookingDetails, 'id' | 'createdAt' | 'status'>;
@@ -38,6 +39,13 @@ const APP_URL = 'https://boltpointlogistics.com/marketplacedelivery';
 const TERMS_VERSION = '2026-08-24';
 const PRIVACY_VERSION = '2026-08-24';
 const SESSION_COOKIE = 'bpl_seller_session';
+
+function adminEmail(request: Request, env: Env) {
+  const url = new URL(request.url);
+  const email = request.headers.get('cf-access-authenticated-user-email') || ((url.hostname === '127.0.0.1' || url.hostname === 'localhost') ? request.headers.get('x-bpl-local-admin-email') : null);
+  const allowed = String(env.ADMIN_EMAILS || '').split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
+  return email && allowed.includes(email.toLowerCase()) ? email.toLowerCase() : null;
+}
 
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : 'Unexpected error.';
@@ -161,21 +169,45 @@ async function fulfillPaidSession(env: Env, session: Stripe.Checkout.Session) {
   const orderNumber = `BPL-${session.id.slice(-10).toUpperCase()}`;
   const amount = (session.amount_total || 0) / 100;
   const now = new Date().toISOString();
-  await env.DB.prepare(`INSERT OR IGNORE INTO dispatch_orders (session_id, order_number, status, created_at, updated_at)
-    VALUES (?1, ?2, 'pending', ?3, ?3)`).bind(session.id, orderNumber, now).run();
-  const existing = await env.DB.prepare('SELECT status, shipday_order_id, error FROM dispatch_orders WHERE session_id = ?1').bind(session.id).first<any>();
+  await env.DB.prepare(`INSERT OR IGNORE INTO dispatch_orders (session_id, order_number, status, amount_cents, booking_snapshot, seller_confirmation_status, created_at, updated_at)
+    VALUES (?1, ?2, 'pending', ?3, ?4, ?5, ?6, ?6)`).bind(session.id, orderNumber, session.amount_total || 0, JSON.stringify(booking), booking.sellerLinkId ? 'pending' : 'not_required', now).run();
+  await env.DB.prepare(`INSERT OR IGNORE INTO order_events (id, session_id, event_type, actor, details, created_at) VALUES (?1, ?2, 'payment_confirmed', 'stripe', ?3, ?4)`)
+    .bind(`OE-${session.id}-paid`, session.id, JSON.stringify({ amountCents: session.amount_total || 0, listingSnapshotAccepted: booking.buyerAcceptedListingCondition === true, deliveryTermsAccepted: booking.buyerAcceptedDeliveryTerms === true }), now).run();
+  const existing = await env.DB.prepare('SELECT status, shipday_order_id, error, seller_confirmation_status, seller_confirmation_token_hash FROM dispatch_orders WHERE session_id = ?1').bind(session.id).first<any>();
   if (existing?.status === 'dispatched') return { orderNumber, booking, status: 'dispatched', shipdayOrderId: existing.shipday_order_id };
+  if (booking.sellerLinkId && existing?.seller_confirmation_status !== 'confirmed') {
+    if (!existing?.seller_confirmation_token_hash) {
+      const confirmationToken = randomToken();
+      const tokenHash = await hashToken(confirmationToken);
+      const saved = await env.DB.prepare(`UPDATE dispatch_orders SET seller_confirmation_token_hash = ?2, updated_at = ?3
+        WHERE session_id = ?1 AND seller_confirmation_token_hash IS NULL`).bind(session.id, tokenHash, now).run();
+      if (saved.meta?.changes && booking.listingSnapshot?.sellerEmail) {
+        const confirmUrl = `${APP_URL}/api/orders/${encodeURIComponent(orderNumber)}/seller-confirm?token=${confirmationToken}`;
+        try {
+          await sendEmail(env, booking.listingSnapshot.sellerEmail, `Confirm item availability for ${orderNumber}`, `A buyer has paid to schedule delivery of ${booking.listingSnapshot.itemTitle}.\n\nConfirm that the item is still available and the disclosed condition is unchanged:\n${confirmUrl}\n\nDispatch will remain paused until you confirm. If the item is unavailable or its condition changed, contact BoltPoint instead of confirming.`, `${session.id}-seller-availability`);
+        } catch (error) {
+          await env.DB.prepare('UPDATE dispatch_orders SET seller_confirmation_token_hash = NULL, error = ?2, updated_at = ?3 WHERE session_id = ?1').bind(session.id, errorMessage(error).slice(0, 500), new Date().toISOString()).run();
+          throw error;
+        }
+      }
+    }
+    return { orderNumber, booking, status: 'awaiting_seller' };
+  }
   const stale = new Date(Date.now() - 5 * 60 * 1000).toISOString();
   const lock = await env.DB.prepare(`UPDATE dispatch_orders SET status = 'processing', error = NULL, updated_at = ?2
     WHERE session_id = ?1 AND (status IN ('pending', 'failed') OR (status = 'processing' AND updated_at < ?3))`).bind(session.id, now, stale).run();
   if (!lock.meta?.changes) return { orderNumber, booking, status: 'processing' };
   try {
     const shipday = await dispatchToShipday(env, booking, orderNumber, amount);
+    const pickupPin = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1000000).padStart(6, '0');
     await env.DB.prepare(`UPDATE dispatch_orders SET status = 'dispatched', shipday_order_id = ?2, error = NULL, updated_at = ?3 WHERE session_id = ?1`)
       .bind(session.id, shipday.orderId, new Date().toISOString()).run();
+    await env.DB.prepare(`INSERT OR IGNORE INTO order_events (id, session_id, event_type, actor, details, created_at) VALUES (?1, ?2, 'shipday_dispatched', 'system', ?3, ?4)`)
+      .bind(`OE-${session.id}-shipday`, session.id, JSON.stringify({ shipdayOrderId: shipday.orderId }), new Date().toISOString()).run();
+    await env.DB.prepare('UPDATE dispatch_orders SET pickup_pin_hash = ?2 WHERE session_id = ?1 AND pickup_pin_hash IS NULL').bind(session.id, await hashToken(pickupPin)).run();
     if (booking.sellerLinkId) await env.DB.prepare('UPDATE seller_links SET status = ?1 WHERE id = ?2').bind('Booked', booking.sellerLinkId).run();
     const summary = `Delivery ${orderNumber} is paid and sent to dispatch.\nPickup: ${booking.pickupAddress}\nDelivery: ${booking.deliveryAddress}\nTotal: $${amount.toFixed(2)}`;
-    await Promise.allSettled([sendEmail(env, booking.customerEmail, `Delivery confirmed: ${orderNumber}`, summary, `${session.id}-customer`), env.BUSINESS_EMAIL ? sendEmail(env, env.BUSINESS_EMAIL, `New paid delivery: ${orderNumber}`, `${summary}\nShipday order: ${shipday.orderId}`, `${session.id}-business`) : Promise.resolve()]);
+    await Promise.allSettled([sendEmail(env, booking.customerEmail, `Delivery confirmed: ${orderNumber}`, summary, `${session.id}-customer`), booking.listingSnapshot?.sellerEmail ? sendEmail(env, booking.listingSnapshot.sellerEmail, `Pickup PIN for ${orderNumber}`, `Your item is confirmed for dispatch. Give this one-time pickup PIN to the delivery partner only after you verify the item and are ready for it to be loaded:\n\n${pickupPin}`, `${session.id}-pickup-pin`) : Promise.resolve(), env.BUSINESS_EMAIL ? sendEmail(env, env.BUSINESS_EMAIL, `New paid delivery: ${orderNumber}`, `${summary}\nShipday order: ${shipday.orderId}`, `${session.id}-business`) : Promise.resolve()]);
     console.log(`Shipday dispatch created for ${orderNumber}: ${shipday.orderId}`);
     return { orderNumber, booking, status: 'dispatched', shipdayOrderId: shipday.orderId };
   } catch (error) {
@@ -278,6 +310,14 @@ function decodeDataUrl(value: string) {
 
 async function createSellerLink(request: Request, env: Env) {
   const data = await request.json() as any;
+  required(data.sellerName, 'Seller name');
+  required(data.sellerPhone, 'Seller phone');
+  required(data.sellerEmail, 'Seller email');
+  required(data.itemTitle, 'Item title');
+  required(data.dimensions, 'Item dimensions');
+  if (!['Excellent', 'Good', 'Fair', 'Needs Repair'].includes(data.conditionRating)) throw new Error('Select the current item condition.');
+  if (!Array.isArray(data.itemPhotos) || data.itemPhotos.length < 4) throw new Error('Add at least four current item photos.');
+  if (!data.conditionCertifiedAt) throw new Error('Seller condition certification is required.');
   const id = `SL-${String(parseInt(randomToken(4), 16) % 1000000).padStart(6, '0')}`;
   const claimToken = randomToken();
   const photos: string[] = [];
@@ -449,6 +489,43 @@ async function api(request: Request, env: Env, path: string) {
   }
   const sellerResponse = await sellerRoutes(request, env, path);
   if (sellerResponse) return sellerResponse;
+  const sellerConfirmationMatch = path.match(/^\/api\/orders\/(BPL-[A-Z0-9]+)\/seller-confirm$/);
+  if (request.method === 'GET' && sellerConfirmationMatch) {
+    const token = new URL(request.url).searchParams.get('token') || '';
+    const row = await env.DB.prepare('SELECT session_id FROM dispatch_orders WHERE order_number = ?1 AND seller_confirmation_token_hash = ?2').bind(sellerConfirmationMatch[1], await hashToken(token)).first<any>();
+    if (!row) return Response.redirect(`${APP_URL}/?seller_confirmation=invalid`, 302);
+    const now = new Date().toISOString();
+    await env.DB.prepare(`UPDATE dispatch_orders SET seller_confirmation_status = 'confirmed', seller_confirmed_at = ?2, seller_confirmation_token_hash = NULL, updated_at = ?2 WHERE session_id = ?1`).bind(row.session_id, now).run();
+    await env.DB.prepare(`INSERT OR IGNORE INTO order_events (id, session_id, event_type, actor, details, created_at) VALUES (?1, ?2, 'seller_availability_confirmed', 'seller', '{}', ?3)`).bind(`OE-${row.session_id}-seller-confirmed`, row.session_id, now).run();
+    const stripe = stripeClient(env);
+    if (!stripe) return json({ error: 'Checkout is not configured.' }, 503);
+    const session = await stripe.checkout.sessions.retrieve(row.session_id);
+    await fulfillPaidSession(env, session);
+    return Response.redirect(`${APP_URL}/?seller_confirmation=confirmed`, 302);
+  }
+  if (path === '/api/admin/overview' && request.method === 'GET') {
+    const email = adminEmail(request, env);
+    if (!email) return json({ error: 'Administrator access required.' }, 403);
+    const orders = await env.DB.prepare(`SELECT session_id, order_number, status, amount_cents, seller_confirmation_status, seller_confirmed_at, pickup_status, pickup_report, delivery_report, shipday_order_id, error, created_at, updated_at FROM dispatch_orders ORDER BY created_at DESC LIMIT 250`).all<any>();
+    const accounts = await env.DB.prepare('SELECT COUNT(*) AS total FROM seller_accounts').first<any>();
+    const links = await env.DB.prepare(`SELECT status, COUNT(*) AS total FROM seller_links GROUP BY status`).all<any>();
+    return json({ admin: email, sellerAccounts: Number(accounts?.total || 0), listingCounts: links.results || [], orders: orders.results || [] });
+  }
+  const pickupMatch = path.match(/^\/api\/admin\/orders\/(BPL-[A-Z0-9]+)\/pickup-report$/);
+  if (pickupMatch && request.method === 'POST') {
+    const email = adminEmail(request, env);
+    if (!email) return json({ error: 'Administrator access required.' }, 403);
+    const body = await request.json() as any;
+    if (!['matches', 'minor_discrepancy', 'materially_different', 'unavailable'].includes(body.result)) return json({ error: 'Select a valid pickup inspection result.' }, 400);
+    const row = await env.DB.prepare('SELECT session_id, pickup_pin_hash FROM dispatch_orders WHERE order_number = ?1').bind(pickupMatch[1]).first<any>();
+    if (!row) return json({ error: 'Order not found.' }, 404);
+    if (!body.pickupPin || await hashToken(String(body.pickupPin)) !== row.pickup_pin_hash) return json({ error: 'The seller pickup PIN is incorrect.' }, 403);
+    const report = { result: body.result, notes: String(body.notes || '').slice(0, 1500), photos: Array.isArray(body.photos) ? body.photos.slice(0, 8) : [], inspectedBy: email, inspectedAt: new Date().toISOString() };
+    const pickupStatus = body.result === 'matches' || body.result === 'minor_discrepancy' ? 'approved' : 'paused';
+    await env.DB.prepare('UPDATE dispatch_orders SET pickup_status = ?2, pickup_report = ?3, updated_at = ?4 WHERE session_id = ?1').bind(row.session_id, pickupStatus, JSON.stringify(report), report.inspectedAt).run();
+    await env.DB.prepare('INSERT INTO order_events (id, session_id, event_type, actor, details, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)').bind(`OE-${randomToken(12)}`, row.session_id, 'pickup_inspection', email, JSON.stringify(report), report.inspectedAt).run();
+    return json({ success: true, pickupStatus });
+  }
   if (request.method === 'GET' && path.startsWith('/api/images/')) {
     const object = await env.IMAGES.get(path.slice('/api/images/'.length));
     return object ? new Response(object.body, { headers: { 'content-type': object.httpMetadata?.contentType || 'image/jpeg', 'cache-control': 'public, max-age=31536000, immutable', etag: object.httpEtag || '' } }) : new Response('Not found', { status: 404 });
@@ -486,12 +563,14 @@ async function api(request: Request, env: Env, path: string) {
         const stored = await env.DB.prepare('SELECT data, status FROM seller_links WHERE id = ?1').bind(input.sellerLinkId.toUpperCase()).first<any>();
         if (!stored || stored.status !== 'Active') throw new Error('This seller link is no longer active.');
         sellerLink = JSON.parse(stored.data);
+        if (!sellerLink!.sellerEmail) throw new Error('The seller must add an email address before buyers can book this listing.');
         pickupAddress = sellerLink!.exactPickupAddress!;
       }
       if (!isFullStreetAddress(pickupAddress) || !isFullStreetAddress(quote.deliveryZip)) throw new Error('Complete pickup and delivery addresses are required.');
       const route = await calculateRoadRoute(env, pickupAddress, quote.deliveryZip);
       const verifiedQuote = calculateQuote({ ...quote, accurateMiles: route.miles, drivingDuration: route.duration, isOpenStreetMapVerified: true });
-      const booking = { ...input, pickupAddress, sellerName: sellerLink?.sellerName || input.sellerName, sellerPhone: sellerLink?.sellerPhone || input.sellerPhone, itemPhotos: [], quote: { ...quote, pickupZip: pickupAddress }, quoteResult: verifiedQuote } as CheckoutBooking;
+      if (sellerLink && (input.buyerAcceptedListingCondition !== true || input.buyerAcceptedDeliveryTerms !== true)) throw new Error('Review and accept the item condition and delivery terms before checkout.');
+      const booking = { ...input, pickupAddress, sellerName: sellerLink?.sellerName || input.sellerName, sellerPhone: sellerLink?.sellerPhone || input.sellerPhone, itemPhotos: [], listingSnapshot: sellerLink || undefined, quote: { ...quote, pickupZip: pickupAddress }, quoteResult: verifiedQuote } as CheckoutBooking;
       required(booking.customerName, 'Customer name'); required(booking.customerPhone, 'Customer phone'); required(booking.customerEmail, 'Customer email');
       const payout = driverPayout(verifiedQuote.vehicleTypeRecommended, verifiedQuote.estimatedMiles);
       const session = await stripe.checkout.sessions.create({
