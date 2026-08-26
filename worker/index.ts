@@ -130,6 +130,27 @@ async function sendEmail(env: Env, to: string, subject: string, text: string, ke
   throw new Error(lastError);
 }
 
+async function recordOrderEvent(
+  env: Env,
+  sessionId: string,
+  eventType: string,
+  actor: string,
+  details: Record<string, unknown>,
+  createdAt: string,
+  once = true,
+) {
+  const eventData = JSON.stringify({ actor, ...details });
+  if (once) {
+    await env.DB.prepare(`INSERT INTO order_events (session_id, event_type, event_data, created_at)
+      SELECT ?1, ?2, ?3, ?4 WHERE NOT EXISTS (
+        SELECT 1 FROM order_events WHERE session_id = ?1 AND event_type = ?2
+      )`).bind(sessionId, eventType, eventData, createdAt).run();
+    return;
+  }
+  await env.DB.prepare('INSERT INTO order_events (session_id, event_type, event_data, created_at) VALUES (?1, ?2, ?3, ?4)')
+    .bind(sessionId, eventType, eventData, createdAt).run();
+}
+
 async function dispatchToShipday(env: Env, booking: CheckoutBooking, orderNumber: string, amount: number) {
   if (!env.SHIPDAY_API_KEY) throw new Error('SHIPDAY_API_KEY is not configured.');
   const normalizePhone = (value?: string) => {
@@ -171,8 +192,11 @@ async function fulfillPaidSession(env: Env, session: Stripe.Checkout.Session) {
   const now = new Date().toISOString();
   await env.DB.prepare(`INSERT OR IGNORE INTO dispatch_orders (session_id, order_number, status, amount_cents, booking_snapshot, seller_confirmation_status, created_at, updated_at)
     VALUES (?1, ?2, 'pending', ?3, ?4, ?5, ?6, ?6)`).bind(session.id, orderNumber, session.amount_total || 0, JSON.stringify(booking), booking.sellerLinkId ? 'pending' : 'not_required', now).run();
-  await env.DB.prepare(`INSERT OR IGNORE INTO order_events (id, session_id, event_type, actor, details, created_at) VALUES (?1, ?2, 'payment_confirmed', 'stripe', ?3, ?4)`)
-    .bind(`OE-${session.id}-paid`, session.id, JSON.stringify({ amountCents: session.amount_total || 0, listingSnapshotAccepted: booking.buyerAcceptedListingCondition === true, deliveryTermsAccepted: booking.buyerAcceptedDeliveryTerms === true }), now).run();
+  await recordOrderEvent(env, session.id, 'payment_confirmed', 'stripe', {
+    amountCents: session.amount_total || 0,
+    listingSnapshotAccepted: booking.buyerAcceptedListingCondition === true,
+    deliveryTermsAccepted: booking.buyerAcceptedDeliveryTerms === true,
+  }, now);
   const existing = await env.DB.prepare('SELECT status, shipday_order_id, error, seller_confirmation_status, seller_confirmation_token_hash FROM dispatch_orders WHERE session_id = ?1').bind(session.id).first<any>();
   if (existing?.status === 'dispatched') return { orderNumber, booking, status: 'dispatched', shipdayOrderId: existing.shipday_order_id };
   if (booking.sellerLinkId && existing?.seller_confirmation_status !== 'confirmed') {
@@ -202,8 +226,7 @@ async function fulfillPaidSession(env: Env, session: Stripe.Checkout.Session) {
     const pickupPin = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1000000).padStart(6, '0');
     await env.DB.prepare(`UPDATE dispatch_orders SET status = 'dispatched', shipday_order_id = ?2, error = NULL, updated_at = ?3 WHERE session_id = ?1`)
       .bind(session.id, shipday.orderId, new Date().toISOString()).run();
-    await env.DB.prepare(`INSERT OR IGNORE INTO order_events (id, session_id, event_type, actor, details, created_at) VALUES (?1, ?2, 'shipday_dispatched', 'system', ?3, ?4)`)
-      .bind(`OE-${session.id}-shipday`, session.id, JSON.stringify({ shipdayOrderId: shipday.orderId }), new Date().toISOString()).run();
+    await recordOrderEvent(env, session.id, 'shipday_dispatched', 'system', { shipdayOrderId: shipday.orderId }, new Date().toISOString());
     await env.DB.prepare('UPDATE dispatch_orders SET pickup_pin_hash = ?2 WHERE session_id = ?1 AND pickup_pin_hash IS NULL').bind(session.id, await hashToken(pickupPin)).run();
     if (booking.sellerLinkId) await env.DB.prepare('UPDATE seller_links SET status = ?1 WHERE id = ?2').bind('Booked', booking.sellerLinkId).run();
     const summary = `Delivery ${orderNumber} is paid and sent to dispatch.\nPickup: ${booking.pickupAddress}\nDelivery: ${booking.deliveryAddress}\nTotal: $${amount.toFixed(2)}`;
@@ -496,7 +519,7 @@ async function api(request: Request, env: Env, path: string) {
     if (!row) return Response.redirect(`${APP_URL}/?seller_confirmation=invalid`, 302);
     const now = new Date().toISOString();
     await env.DB.prepare(`UPDATE dispatch_orders SET seller_confirmation_status = 'confirmed', seller_confirmed_at = ?2, seller_confirmation_token_hash = NULL, updated_at = ?2 WHERE session_id = ?1`).bind(row.session_id, now).run();
-    await env.DB.prepare(`INSERT OR IGNORE INTO order_events (id, session_id, event_type, actor, details, created_at) VALUES (?1, ?2, 'seller_availability_confirmed', 'seller', '{}', ?3)`).bind(`OE-${row.session_id}-seller-confirmed`, row.session_id, now).run();
+    await recordOrderEvent(env, row.session_id, 'seller_availability_confirmed', 'seller', {}, now);
     const stripe = stripeClient(env);
     if (!stripe) return json({ error: 'Checkout is not configured.' }, 503);
     const session = await stripe.checkout.sessions.retrieve(row.session_id);
@@ -523,7 +546,7 @@ async function api(request: Request, env: Env, path: string) {
     const report = { result: body.result, notes: String(body.notes || '').slice(0, 1500), photos: Array.isArray(body.photos) ? body.photos.slice(0, 8) : [], inspectedBy: email, inspectedAt: new Date().toISOString() };
     const pickupStatus = body.result === 'matches' || body.result === 'minor_discrepancy' ? 'approved' : 'paused';
     await env.DB.prepare('UPDATE dispatch_orders SET pickup_status = ?2, pickup_report = ?3, updated_at = ?4 WHERE session_id = ?1').bind(row.session_id, pickupStatus, JSON.stringify(report), report.inspectedAt).run();
-    await env.DB.prepare('INSERT INTO order_events (id, session_id, event_type, actor, details, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)').bind(`OE-${randomToken(12)}`, row.session_id, 'pickup_inspection', email, JSON.stringify(report), report.inspectedAt).run();
+    await recordOrderEvent(env, row.session_id, 'pickup_inspection', email, report, report.inspectedAt, false);
     return json({ success: true, pickupStatus });
   }
   if (request.method === 'GET' && path.startsWith('/api/images/')) {
