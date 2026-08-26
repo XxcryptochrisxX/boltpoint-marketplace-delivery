@@ -122,12 +122,8 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
   const [sellerName, setSellerName] = useState(sellerLink?.sellerName || '');
   const [sellerPhone, setSellerPhone] = useState(sellerLink?.sellerPhone || '');
   const [itemDescription, setItemDescription] = useState(sellerLink?.itemDescription || '');
-  const [preferredDeliveryDate, setPreferredDeliveryDate] = useState(() => {
-    const date = new Date();
-    date.setDate(date.getDate() + 1);
-    return date.toISOString().slice(0, 10);
-  });
-  const [preferredDeliveryTimeSlot, setPreferredDeliveryTimeSlot] = useState('2:00 PM - 3:00 PM');
+  const preferredDeliveryDate = '';
+  const preferredDeliveryTimeSlot = 'Coordinated after seller availability';
   const [specialNotes, setSpecialNotes] = useState('');
   const [uploadedPhotos, setUploadedPhotos] = useState<string[]>(sellerLink?.itemPhotos || []);
   const [buyerAcceptedListingCondition, setBuyerAcceptedListingCondition] = useState(false);
@@ -135,7 +131,7 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [completedBooking, setCompletedBooking] = useState<BookingDetails | null>(null);
-  const [dispatchStatus, setDispatchStatus] = useState<'awaiting_seller' | 'dispatched' | 'processing' | 'failed' | null>(null);
+  const [dispatchStatus, setDispatchStatus] = useState<'awaiting_seller' | 'awaiting_buyer' | 'ready_to_schedule' | 'dispatched' | 'processing' | 'failed' | null>(null);
   const [buyerStep, setBuyerStep] = useState<1 | 2 | 3>(1);
 
   useEffect(() => {
@@ -154,6 +150,10 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
         setDispatchStatus(status);
         if (status === 'awaiting_seller') {
           onShowToast('Payment Received — Seller Confirmation Needed', 'We emailed the seller to reconfirm availability before dispatch.', 'info');
+        } else if (status === 'awaiting_buyer') {
+          onShowToast('Seller Availability Received', 'Check your email to choose one of the seller’s available windows.', 'info');
+        } else if (status === 'ready_to_schedule') {
+          onShowToast('Window Selected', 'Dispatch will contact both parties to confirm the final time.', 'success');
         } else if (status === 'failed') {
           onShowToast('Payment Received — Dispatch Needs Attention', data.dispatchError || `Order ${data.orderNumber} will be entered into dispatch manually.`, 'info');
         } else if (status === 'dispatched') {
@@ -601,16 +601,16 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
               {/* Section 4: Time Window & Options */}
               {(!sellerLink || buyerStep === 3) && <div className="space-y-4">
                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-2">
-                  {sellerLink ? '3.' : '4.'} Delivery Schedule & Preferences
+                  {sellerLink ? '3.' : '4.'} Delivery Preferences
                 </h3>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {!sellerLink && <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Preferred Date</label>
                     <input
                       type="date"
                       value={preferredDeliveryDate}
-                      onChange={(e) => setPreferredDeliveryDate(e.target.value)}
+                      readOnly
                       className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none text-sm text-slate-900 font-medium bg-white"
                     />
                   </div>
@@ -619,7 +619,7 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
                     <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Arrival Window</label>
                     <select
                       value={preferredDeliveryTimeSlot}
-                      onChange={(e) => setPreferredDeliveryTimeSlot(e.target.value)}
+                      disabled
                       className="w-full px-4 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 outline-none text-sm text-slate-900 font-medium bg-white"
                     >
                       <option value="10:00 AM - 11:00 AM">10:00 AM - 11:00 AM</option>
@@ -629,7 +629,9 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
                       <option value="6:00 PM - 7:00 PM">6:00 PM - 7:00 PM</option>
                     </select>
                   </div>
-                </div>
+                </div>}
+
+                {sellerLink && <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm leading-relaxed text-blue-950"><strong>No scheduling back-and-forth at checkout.</strong> After payment, the seller submits pickup availability. We’ll email you the matching options, then dispatch will contact both parties to confirm the final pickup and delivery time. Delivery is typically completed within 1–2 days.</div>}
 
                 {/* Seller photos are view-only for buyers using a seller link. */}
                 <div>
@@ -693,7 +695,7 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
                       <input type="checkbox" checked={buyerAcceptedDeliveryTerms} onChange={(e) => setBuyerAcceptedDeliveryTerms(e.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 accent-blue-600" />
                       <span>I understand BoltPoint is charging for delivery. The item sale is between me and the seller; pre-existing condition disputes are separate from documented damage caused during transport.</span>
                     </label>
-                    <p className="text-[11px] text-slate-500">After payment, the seller must reconfirm availability. If the item is unavailable or materially different at pickup, delivery will pause for review.</p>
+                    <p className="text-[11px] text-slate-500">After payment, the seller confirms the item and submits pickup availability. You will then choose from those options before dispatch finalizes the time.</p>
                   </div>
                 )}
 
@@ -851,8 +853,8 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
                   <span className="font-medium text-slate-800">{completedBooking.quoteResult.estimatedMiles} Miles</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-500">Scheduled Arrival:</span>
-                  <span className="font-medium text-slate-800">{completedBooking.preferredDeliveryDate} ({completedBooking.preferredDeliveryTimeSlot})</span>
+                  <span className="text-slate-500">Scheduling:</span>
+                  <span className="text-right font-medium text-slate-800">Seller availability requested; dispatch will confirm</span>
                 </div>
                 <div className="flex justify-between font-bold text-slate-900 border-t border-slate-200 pt-1">
                   <span>Total Charged:</span>
@@ -861,10 +863,12 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
               </div>
 
               <p className="text-slate-600 text-xs leading-relaxed">
-                {dispatchStatus === 'awaiting_seller' && <>Payment was received. We emailed the seller to reconfirm that the item is available and unchanged. Dispatch remains paused until they confirm.</>}
+                {dispatchStatus === 'awaiting_seller' && <>Payment was received. We emailed the seller to confirm the item and provide pickup availability. You’ll receive an email to choose from their options; dispatch will then confirm the final time.</>}
+                {dispatchStatus === 'awaiting_buyer' && <>The seller submitted pickup availability. Check your email to choose the option that works for you.</>}
+                {dispatchStatus === 'ready_to_schedule' && <>Your preferred window was received. Dispatch will contact both parties to confirm the final time before assigning a driver.</>}
                 {dispatchStatus === 'dispatched' && <>Your paid order was sent to Shipday successfully. A confirmation email will be sent to <strong>{completedBooking.customerEmail}</strong>; we will contact you when a driver is assigned.</>}
                 {dispatchStatus === 'failed' && <>Your payment was received, but automated dispatch needs attention. We will enter this order manually—please do not pay again. A confirmation email will be sent to <strong>{completedBooking.customerEmail}</strong>.</>}
-                {dispatchStatus !== 'awaiting_seller' && dispatchStatus !== 'dispatched' && dispatchStatus !== 'failed' && <>Your paid order is being sent to dispatch. A confirmation email will be sent to <strong>{completedBooking.customerEmail}</strong>; we will contact you when a driver is assigned.</>}
+                {dispatchStatus !== 'awaiting_seller' && dispatchStatus !== 'awaiting_buyer' && dispatchStatus !== 'ready_to_schedule' && dispatchStatus !== 'dispatched' && dispatchStatus !== 'failed' && <>Your paid order is being prepared. A confirmation email will be sent to <strong>{completedBooking.customerEmail}</strong>.</>}
               </p>
 
               <div className="pt-2 flex flex-col gap-2">
@@ -887,3 +891,4 @@ export function BookingPage({ initialQuote, activeSellerLink: propSellerLink, on
     </div>
   );
 }
+
