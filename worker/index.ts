@@ -517,6 +517,16 @@ async function api(request: Request, env: Env, path: string) {
     const token = new URL(request.url).searchParams.get('token') || '';
     const row = await env.DB.prepare('SELECT session_id FROM dispatch_orders WHERE order_number = ?1 AND seller_confirmation_token_hash = ?2').bind(sellerConfirmationMatch[1], await hashToken(token)).first<any>();
     if (!row) return Response.redirect(`${APP_URL}/?seller_confirmation=invalid`, 302);
+    const action = `${PREFIX}/api/orders/${encodeURIComponent(sellerConfirmationMatch[1])}/seller-confirm`;
+    return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Confirm item availability</title><style>body{margin:0;background:#f8fafc;color:#0f172a;font-family:system-ui,sans-serif}.card{max-width:520px;margin:8vh auto;padding:28px;border:1px solid #dbeafe;border-radius:24px;background:white;box-shadow:0 18px 45px #0f172a18}h1{margin:0 0 12px;font-size:26px}p{line-height:1.55;color:#475569}.order{margin:18px 0;padding:12px;border-radius:12px;background:#eff6ff;color:#1d4ed8;font-weight:800}button{width:100%;border:0;border-radius:14px;padding:15px;background:#f97316;color:white;font-size:16px;font-weight:800;cursor:pointer}</style></head><body><main class="card"><h1>Confirm item availability</h1><p>A buyer has paid for delivery. Confirm only if the item is still available and its condition matches your listing. Dispatch remains paused until you press the button below.</p><div class="order">Order ${sellerConfirmationMatch[1]}</div><form method="post" action="${action}"><input type="hidden" name="token" value="${token}"><button type="submit">Confirm item and release to dispatch</button></form></main></body></html>`, {
+      headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'" },
+    });
+  }
+  if (request.method === 'POST' && sellerConfirmationMatch) {
+    const form = await request.formData();
+    const token = String(form.get('token') || '');
+    const row = await env.DB.prepare('SELECT session_id FROM dispatch_orders WHERE order_number = ?1 AND seller_confirmation_token_hash = ?2').bind(sellerConfirmationMatch[1], await hashToken(token)).first<any>();
+    if (!row) return Response.redirect(`${APP_URL}/?seller_confirmation=invalid`, 302);
     const now = new Date().toISOString();
     await env.DB.prepare(`UPDATE dispatch_orders SET seller_confirmation_status = 'confirmed', seller_confirmed_at = ?2, seller_confirmation_token_hash = NULL, updated_at = ?2 WHERE session_id = ?1`).bind(row.session_id, now).run();
     await recordOrderEvent(env, row.session_id, 'seller_availability_confirmed', 'seller', {}, now);
