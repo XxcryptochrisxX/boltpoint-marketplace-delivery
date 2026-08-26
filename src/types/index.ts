@@ -47,6 +47,16 @@ export interface SellerDeliveryLink {
   askingPrice?: number;
   itemDescription?: string;
   itemPhotos: string[];
+  conditionRating?: 'Excellent' | 'Good' | 'Fair' | 'Needs Repair';
+  knownDefects?: string;
+  hasStainsOrOdors?: boolean;
+  hasPetExposure?: boolean;
+  hasSmokeExposure?: boolean;
+  hasStructuralDamage?: boolean;
+  hasMissingPieces?: boolean;
+  hasElectricalComponents?: boolean;
+  dimensions?: string;
+  conditionCertifiedAt?: string;
   exactPickupAddress?: string;
   pickupZip: string;
   pickupCityState: string;
@@ -92,6 +102,9 @@ export interface BookingDetails {
   preferredDeliveryTimeSlot: string;
   itemPhotos: string[];
   specialNotes?: string;
+  buyerAcceptedListingCondition?: boolean;
+  buyerAcceptedDeliveryTerms?: boolean;
+  listingSnapshot?: SellerDeliveryLink;
   status: 'Pending' | 'Driver Assigned' | 'En Route' | 'Picked Up' | 'Delivered' | 'Cancelled';
   createdAt: string;
 }

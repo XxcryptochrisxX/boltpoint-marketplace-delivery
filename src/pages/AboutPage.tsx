@@ -32,7 +32,7 @@ export function AboutPage({ onNavigate }: AboutPageProps) {
           <div className="space-y-4">
             <h2 className="text-2xl font-bold text-slate-900">Empowering Local Buyers & Independent Truck Owners</h2>
             <p className="text-slate-600 text-sm leading-relaxed">
-              Founded in Austin, Texas, {APP_NAME} was built to make heavy item transport as easy as ordering ride-share or food delivery.
+              Built for the Tampa Bay community, {APP_NAME} makes local marketplace furniture delivery easier to arrange and document.
             </p>
             <p className="text-slate-600 text-sm leading-relaxed">
               We connect local buyers directly with vetted truck and van owners who want to earn flexible income while solving logistics bottlenecks for local communities.
@@ -43,16 +43,16 @@ export function AboutPage({ onNavigate }: AboutPageProps) {
             <div className="flex items-center gap-3">
               <ShieldCheck className="w-8 h-8 text-blue-600" />
               <div>
-                <h3 className="font-bold text-slate-900 text-sm">The $50,000 Guarantee</h3>
-                <p className="text-xs text-slate-500">Every item is covered by cargo protection from pickup to placement.</p>
+                <h3 className="font-bold text-slate-900 text-sm">Documented Delivery Protection</h3>
+                <p className="text-xs text-slate-500">Condition photos, timestamps, and delivery records are retained for every eligible claim review.</p>
               </div>
             </div>
 
             <div className="flex items-center gap-3">
               <Award className="w-8 h-8 text-blue-600" />
               <div>
-                <h3 className="font-bold text-slate-900 text-sm">1,400+ Verified Deliveries</h3>
-                <p className="text-xs text-slate-500">Maintaining an average 4.9/5 star customer satisfaction rating.</p>
+                <h3 className="font-bold text-slate-900 text-sm">Tampa Bay Launch</h3>
+                <p className="text-xs text-slate-500">Starting locally so every delivery process can be closely monitored.</p>
               </div>
             </div>
 
@@ -60,7 +60,7 @@ export function AboutPage({ onNavigate }: AboutPageProps) {
               <Users className="w-8 h-8 text-blue-600" />
               <div>
                 <h3 className="font-bold text-slate-900 text-sm">Vetted Delivery Network</h3>
-                <p className="text-xs text-slate-500">Background-checked, insured independent drivers with proper lifting gear.</p>
+                <p className="text-xs text-slate-500">Approved independent delivery partners whose required business documents are reviewed before dispatch.</p>
               </div>
             </div>
           </div>

@@ -111,6 +111,16 @@ export function createSellerDeliveryLink(data: {
   askingPrice?: number;
   itemDescription?: string;
   itemPhotos: string[];
+  conditionRating: 'Excellent' | 'Good' | 'Fair' | 'Needs Repair';
+  knownDefects: string;
+  hasStainsOrOdors: boolean;
+  hasPetExposure: boolean;
+  hasSmokeExposure: boolean;
+  hasStructuralDamage: boolean;
+  hasMissingPieces: boolean;
+  hasElectricalComponents: boolean;
+  dimensions: string;
+  conditionCertifiedAt: string;
   exactPickupAddress: string;
   pickupZip: string;
   pickupCityState?: string;
@@ -133,6 +143,16 @@ export function createSellerDeliveryLink(data: {
     askingPrice: data.askingPrice,
     itemDescription: data.itemDescription,
     itemPhotos: data.itemPhotos,
+    conditionRating: data.conditionRating,
+    knownDefects: data.knownDefects,
+    hasStainsOrOdors: data.hasStainsOrOdors,
+    hasPetExposure: data.hasPetExposure,
+    hasSmokeExposure: data.hasSmokeExposure,
+    hasStructuralDamage: data.hasStructuralDamage,
+    hasMissingPieces: data.hasMissingPieces,
+    hasElectricalComponents: data.hasElectricalComponents,
+    dimensions: data.dimensions,
+    conditionCertifiedAt: data.conditionCertifiedAt,
     exactPickupAddress: data.exactPickupAddress,
     pickupZip: data.pickupZip,
     pickupCityState: cityState,

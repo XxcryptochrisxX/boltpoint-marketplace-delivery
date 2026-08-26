@@ -37,9 +37,13 @@ export default function App() {
       } else if (params.get('seller_account')) {
         setActiveView('seller-account');
         setSellerAccountVerified(params.get('seller_account') === 'verified');
+      } else if (params.get('view') === 'admin-dashboard') {
+        setActiveView('admin-dashboard');
       } else if (params.get('view') === 'for-sellers') {
         setActiveView('for-sellers');
       }
+      if (params.get('seller_confirmation') === 'confirmed') showToast('Availability Confirmed', 'Thank you. The paid order has been released to dispatch.', 'success');
+      if (params.get('seller_confirmation') === 'invalid') showToast('Confirmation Link Invalid', 'This availability link is invalid or has already been used.', 'error');
     }
   }, []);
 

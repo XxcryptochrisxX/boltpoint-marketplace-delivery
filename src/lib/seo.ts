@@ -10,7 +10,7 @@ export interface MetadataConfig {
 export function getDefaultMetadata(): MetadataConfig {
   return {
     title: `${APP_NAME} | Oversized Item Delivery from Facebook Marketplace & Local Sellers`,
-    description: `${APP_TAGLINE} ${APP_SUBTITLE} Fast, insured, on-demand pickup and delivery for sofas, tables, appliances, and furniture.`,
+    description: `${APP_TAGLINE} ${APP_SUBTITLE} Simple local pickup and delivery for marketplace furniture in the Tampa Bay region.`,
     url: typeof window !== 'undefined' ? window.location.origin : 'https://marketplacedelivery.com',
     ogImage: 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=1200&h=630&q=80',
   };
