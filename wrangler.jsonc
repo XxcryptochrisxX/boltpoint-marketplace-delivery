@@ -20,5 +20,10 @@
       "migrations_dir": "migrations"
     }
   ],
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+  "vars": {
+    "EMAIL_FROM": "Boltpoint Logistics <admin@boltpointlogistics.com>",
+    "BUSINESS_EMAIL": "admin@boltpointlogistics.com",
+    "ADMIN_EMAILS": "admin@boltpointlogistics.com"
+  }
 }
